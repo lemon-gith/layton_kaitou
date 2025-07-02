@@ -1,3 +1,5 @@
+# Professor Layton and the Curious Village
+
 | Number | Puzzle Name | Puzzle Type | Picarats | Solver |
 | --- | --- | --- | --- | --- |
 | 080 | Too Many Queens 1 | Chess | 20 | [queen_quandary](./queen_quandary/README.md) |
@@ -8,6 +10,10 @@
 | 130 | Too Many Queens 5 | Chess | 99 | [queen_quandary](./queen_quandary/README.md) |
 | 132 | Princess's Escape | Sliding | 80 | [distressing_damsel](./distressing_damsel/README.md) |
 | 135 | Queen's Escape | Sliding | 99 | [distressing_damsel](./distressing_damsel/README.md) |
+
+<!--
+  The following items are to be uncommented when a new solver is added
+-->
 <!-- | 001 | Where's the Village? | Circle Answer | 10 | [TBD]() | -->
 <!-- | 002 | The Crank and Slot | Multiple Choice | 15 | [TBD]() | -->
 <!-- | 003 | Strange Hats | Multiple Choice | 10 | [TBD]() | -->
