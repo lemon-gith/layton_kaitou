@@ -2,7 +2,12 @@
 #include <array>
 #include <vector>
 
-#include "block.h"
+// just to retain logic, for now
+struct Block{
+  char block_type;  // '1', '2', 'H', 'V', etc.
+  unsigned short size_x;
+  unsigned short size_y;
+};
 
 
 struct Coords{
