@@ -2,6 +2,7 @@
 //!
 //! For now this is the headless half: load a puzzle, inspect it, solve it.
 
+mod look;
 mod render;
 
 use std::fmt::Write as _;
@@ -28,6 +29,13 @@ usage: dd <command>
   solve <puzzle> [options] find the shortest solution
   code <puzzle>            print the puzzle's share code
   export <puzzle>          print the puzzle as a file
+  preview <puzzle> [opts]  draw the puzzle in colour (needs a 24-bit terminal)
+
+preview options:
+  --theme <name|all>  dark, light, escape-dark or escape-light (default all)
+  --scale <n>         characters per cell across, even, 4 or more (default 6)
+  --labels            write each block's label on it
+  --select <label>    outline one block as if selected
 
 <puzzle> is a built-in name, a path to a .toml file, or a share code.
 
@@ -85,6 +93,7 @@ fn run(args: &[String], out: &mut String) -> Result<(), String> {
             put!(out, "{}", file::write(&load(puzzle_arg()?)?));
             Ok(())
         }
+        Some("preview") => preview(&load(puzzle_arg()?)?, &args[2..], out),
         Some("help" | "--help" | "-h") | None => {
             put!(out, "{USAGE}");
             Ok(())
@@ -254,4 +263,43 @@ fn print_solution(puzzle: &Puzzle, solution: &Solution, boards: bool, out: &mut 
 
 fn parse<T: std::str::FromStr>(text: &str) -> Result<T, String> {
     text.parse().map_err(|_| format!("{text:?} is not a number"))
+}
+
+fn preview(spec: &PuzzleSpec, flags: &[String], out: &mut String) -> Result<(), String> {
+    let mut themes: Vec<&look::Theme> = look::THEMES.iter().collect();
+    let mut options = look::PaintOptions { scale: 6, ..Default::default() };
+    let mut labels = false;
+    let mut select = None;
+    let mut flags = flags.iter();
+    while let Some(flag) = flags.next() {
+        let mut value = || flags.next().ok_or(format!("{flag} needs a value"));
+        match flag.as_str() {
+            "--theme" => {
+                let name = value()?;
+                if name != "all" {
+                    themes = vec![look::theme::by_name(name).ok_or(format!("no theme called {name:?}"))?];
+                }
+            }
+            "--scale" => options.scale = parse(value()?)?,
+            "--labels" => labels = true,
+            "--select" => select = Some(value()?.clone()),
+            other => return Err(format!("unknown option {other:?}")),
+        }
+    }
+    let puzzle = build(spec, out)?;
+    let game = Game::new(puzzle);
+    let blocks = &game.puzzle().blocks;
+    if labels {
+        options.labels = blocks.iter().enumerate().map(|(i, b)| (i, b.label.to_string())).collect();
+    }
+    if let Some(label) = select {
+        let id = blocks.iter().position(|b| b.label.to_string() == label);
+        options.selected = Some(id.ok_or(format!("no block {label}"))?);
+    }
+    for theme in themes {
+        say!(out, "{}", theme.name);
+        put!(out, "{}", look::paint(&game, theme, &options).to_ansi());
+        say!(out, "");
+    }
+    Ok(())
 }
