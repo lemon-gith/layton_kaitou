@@ -1,0 +1,13 @@
+name = "Klotski"
+description = "The traditional sliding-block puzzle: bring the big square to the bottom centre."
+grid = """
+ABBC
+ABBC
+DEEF
+DGHF
+I..J
+"""
+
+[goal]
+block = "B"
+at = [1, 3]

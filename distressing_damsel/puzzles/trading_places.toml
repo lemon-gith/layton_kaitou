@@ -1,0 +1,29 @@
+name = "Trading Places"
+description = "Two colours swap sides. Either red block may take either red target."
+grid = """
+PQ..
+#..#
+..ST
+"""
+
+[[goal]]
+block = "P"
+at = [2, 2]
+
+[[goal]]
+block = "Q"
+at = [3, 2]
+
+[[goal]]
+block = "S"
+at = [0, 0]
+
+[[goal]]
+block = "T"
+at = [1, 0]
+
+[blocks.PQ]
+tag = "red"
+
+[blocks.ST]
+tag = "blue"

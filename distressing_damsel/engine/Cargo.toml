@@ -1,0 +1,10 @@
+[package]
+name = "dd_engine"
+description = "Rules, positions and file formats for sliding-block puzzles"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"

@@ -1,0 +1,20 @@
+name = "Gridlock"
+description = "Blocks only slide along their length. Bring X to the right-hand edge."
+grid = """
+..AB..
+..AB.C
+XX.B.C
+DDD..C
+..E.FF
+..E.GG
+"""
+
+[goal]
+block = "X"
+at = [4, 2]
+
+[blocks.XDFG]
+axis = "horizontal"
+
+[blocks.ABCE]
+axis = "vertical"
