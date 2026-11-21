@@ -5,6 +5,9 @@
 //! Neither touches the terminal, so both are tested directly. Loading and
 //! saving go through [`crate::data`] in the app's [`Home`] folder.
 
+// Wired into the game screen in the next commit.
+#[allow(dead_code)]
+pub mod cursor;
 pub mod draw;
 pub mod game;
 pub mod keys;
