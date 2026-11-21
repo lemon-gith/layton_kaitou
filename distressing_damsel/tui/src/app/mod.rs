@@ -9,6 +9,7 @@ pub mod draw;
 pub mod game;
 pub mod keys;
 pub mod menu;
+pub mod run;
 
 use dd_engine::{file, PuzzleSpec};
 
@@ -19,7 +20,7 @@ use crate::puzzles::BUILT_IN;
 use crate::settings::Settings;
 use game::GameScreen;
 use keys::{Action, Context, Key};
-use menu::{item, Menu};
+use menu::{item, not_yet, Menu};
 
 /// Whether the app keeps running after a key.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -367,9 +368,9 @@ impl App {
 fn pause_menu() -> Menu<PauseItem> {
     Menu::new(vec![
         item("Resume", None, true, PauseItem::Resume),
-        item("Restart", Some('r'), false, PauseItem::Restart),
-        item("Checkpoints", Some('c'), false, PauseItem::Checkpoints),
-        item("View solution", Some('s'), false, PauseItem::Solution),
+        not_yet("Restart", Some('r'), PauseItem::Restart),
+        not_yet("Checkpoints", Some('c'), PauseItem::Checkpoints),
+        not_yet("View solution", Some('s'), PauseItem::Solution),
         item("Open a puzzle", Some('o'), true, PauseItem::Open),
         item("New puzzle", Some('n'), true, PauseItem::New),
         item("Quit to home", Some('q'), true, PauseItem::Quit),

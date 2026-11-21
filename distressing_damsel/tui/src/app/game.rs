@@ -94,25 +94,37 @@ impl GameScreen {
         progress::save(data_dir, &self.code, &self.progress)
     }
 
-    /// Board beside the panel if it fits, else the panel underneath, else
-    /// the board at the smallest scale, cut off.
+    /// Board and panel side by side if they fit, else the panel under the
+    /// board, else the board at the smallest scale, cut off. Board and panel
+    /// are placed together as one group, centred in `area`.
     pub fn arrange(&self, settings: &Settings, area: Rect) -> Arrangement {
         let game = self.game();
         let theme = settings.theme();
+        let size = |scale| {
+            let (w, h) = canvas_size(game, theme, scale);
+            (w as u16, h as u16)
+        };
         let beside_width = area.width.saturating_sub(PANEL_WIDTH + 2);
         if let Some(scale) = fitting_scale(game, theme, settings.scale, beside_width, area.height) {
-            let board = Rect::new(area.x, area.y, beside_width, area.height);
-            let panel = Rect::new(area.x + beside_width + 2, area.y, PANEL_WIDTH.min(area.width), area.height);
+            let (w, h) = size(scale);
+            let x = area.x + (area.width - (w + 2 + PANEL_WIDTH)) / 2;
+            let y = area.y + (area.height - h) / 2;
+            let board = Rect::new(x, y, w, h);
+            let panel = Rect::new(x + w + 2, y, PANEL_WIDTH, area.y + area.height - y);
             return Arrangement { board, panel, scale, cramped: false };
         }
-        let above = area.height.saturating_sub(PANEL_HEIGHT);
-        let below = Rect::new(area.x, area.y + above, area.width, area.height - above);
+        let above = area.height.saturating_sub(PANEL_HEIGHT + 1);
         if let Some(scale) = fitting_scale(game, theme, settings.scale, area.width, above) {
-            let board = Rect::new(area.x, area.y, area.width, above);
-            return Arrangement { board, panel: below, scale, cramped: false };
+            let (w, h) = size(scale);
+            let x = area.x + (area.width - w) / 2;
+            let y = area.y + (area.height - (h + 1 + PANEL_HEIGHT)) / 2;
+            let board = Rect::new(x, y, w, h);
+            let panel = Rect::new(x, y + h + 1, PANEL_WIDTH.max(w).min(area.width), PANEL_HEIGHT);
+            return Arrangement { board, panel, scale, cramped: false };
         }
         let board = Rect::new(area.x, area.y, area.width, above);
-        Arrangement { board, panel: below, scale: 4, cramped: true }
+        let panel = Rect::new(area.x, area.y + above + 1, area.width, area.height.saturating_sub(above + 1));
+        Arrangement { board, panel, scale: 4, cramped: true }
     }
 
     fn canvas(&self, settings: &Settings, scale: usize) -> Canvas {
@@ -192,9 +204,15 @@ mod tests {
         assert_eq!((wide.scale, wide.cramped), (6, false));
         assert_eq!(wide.panel.x, w + 2);
 
-        let narrow = screen.arrange(&settings, Rect::new(0, 0, w, h + PANEL_HEIGHT));
+        let narrow = screen.arrange(&settings, Rect::new(0, 0, w, h + PANEL_HEIGHT + 1));
         assert_eq!((narrow.scale, narrow.cramped), (6, false));
-        assert_eq!(narrow.panel.y, h);
+        assert_eq!(narrow.panel.y, h + 1);
+
+        // With room to spare, board and panel stay together in the middle.
+        let roomy = screen.arrange(&settings, Rect::new(0, 0, w + PANEL_WIDTH + 42, h + 10));
+        assert_eq!(roomy.board.x, 20);
+        assert_eq!(roomy.panel.x, roomy.board.x + w + 2);
+        assert_eq!(roomy.board.y, 5);
 
         let tiny = screen.arrange(&settings, Rect::new(0, 0, 10, 10));
         assert!(tiny.cramped);

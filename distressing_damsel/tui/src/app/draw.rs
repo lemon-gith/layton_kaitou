@@ -104,8 +104,8 @@ fn menu_lines<'a, T: Copy>(menu: &Menu<T>, chrome: &Chrome, letters: bool) -> Ve
                 let pad = 18usize.saturating_sub(item.label.chars().count());
                 spans.push(Span::styled(format!("{}{letter}", " ".repeat(pad)), chrome.dim()));
             }
-            if !item.enabled {
-                spans.push(Span::styled("  not yet", chrome.dim()));
+            if let (false, Some(note)) = (item.enabled, item.note) {
+                spans.push(Span::styled(format!("  {note}"), chrome.dim()));
             }
             Line::from(spans)
         })
@@ -138,7 +138,6 @@ fn draw_open(frame: &mut Frame, area: Rect, menu: &Menu<usize>, entries: &[Entry
             Entry::File { file, .. } => file.clone(),
             Entry::Broken { error, .. } => format!("can't read: {error}"),
         };
-        line.spans.retain(|s| s.content != "  not yet");
         let used: usize = line.spans.iter().map(|s| s.content.chars().count()).sum();
         line.spans.push(Span::styled(format!("{}{tag}", " ".repeat(30usize.saturating_sub(used))), chrome.dim()));
     }

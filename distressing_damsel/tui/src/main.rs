@@ -2,16 +2,12 @@
 //!
 //! For now this is the headless half: load a puzzle, inspect it, solve it.
 
-// The interactive app is wired into main in the next commit.
-#[allow(dead_code)]
 mod app;
 mod data;
 mod look;
 mod render;
 mod puzzles;
 mod settings;
-// The interactive interface is assembled over the next commits.
-#[allow(dead_code)]
 mod ui;
 
 use std::fmt::Write as _;
@@ -24,8 +20,10 @@ use dd_solver::{Explore, Options, Outcome, Solution, Solver};
 
 
 const USAGE: &str = "\
-usage: dd <command>
+usage: dd [command]
 
+  (no command)             start the game
+  play <puzzle>            start the game on a puzzle
   list                     built-in puzzles
   show <puzzle>            draw a puzzle and check it
   solve <puzzle> [options] find the shortest solution
@@ -108,7 +106,18 @@ fn run(args: &[String], out: &mut String) -> Result<(), String> {
         }
         Some("preview") => preview(&load(puzzle_arg()?)?, &args[2..], out),
         Some("settings") => show_settings(&args[1..], out),
-        Some("help" | "--help" | "-h") | None => {
+        None => interactive(None),
+        Some("play") => {
+            let arg = puzzle_arg()?;
+            let source = if puzzles::BUILT_IN.iter().any(|(n, _)| n == arg) {
+                data::library::Source::BuiltIn { name: arg.clone() }
+            } else {
+                data::library::Source::Code
+            };
+            interactive(Some((load(arg)?, source)))
+        }
+        Some("snapshot") => snapshot(&args[1..], out),
+        Some("help" | "--help" | "-h") => {
             put!(out, "{USAGE}");
             Ok(())
         }
@@ -450,4 +459,56 @@ impl<'a> Player<'a> {
             self.frame(canvas);
         }
     }
+}
+
+/// Starts the interactive app, optionally on a puzzle.
+fn interactive(puzzle: Option<(PuzzleSpec, data::library::Source)>) -> Result<(), String> {
+    if !std::io::stdout().is_terminal() {
+        return Err("the game needs a terminal; `dd help` lists the other commands".into());
+    }
+    let mut app = app::App::new(data::Home::from_env())?;
+    if let Some((spec, source)) = puzzle {
+        app.open_puzzle(spec, source);
+    }
+    app::run::run(&mut app).map_err(|e| e.to_string())
+}
+
+/// `dd snapshot [--size WxH] [--keys a,b,c] [puzzle]`: draws the app after
+/// the given keys, without a terminal. For screenshots and checks.
+fn snapshot(args: &[String], out: &mut String) -> Result<(), String> {
+    let (mut width, mut height) = (100u16, 32u16);
+    let mut keys = Vec::new();
+    let mut puzzle = None;
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--size" => {
+                let size = args.next().ok_or("--size needs WxH")?;
+                let (w, h) = size.split_once('x').ok_or("--size needs WxH")?;
+                (width, height) = (parse(w)?, parse(h)?);
+            }
+            "--keys" => {
+                for name in args.next().ok_or("--keys needs a list")?.split(',') {
+                    keys.push(app::run::key_named(name).ok_or(format!("unknown key {name:?}"))?);
+                }
+            }
+            other => puzzle = Some(other.to_string()),
+        }
+    }
+    let mut app = app::App::new(data::Home::from_env())?;
+    if let Some(name) = puzzle {
+        let source = if puzzles::BUILT_IN.iter().any(|(n, _)| *n == name) {
+            data::library::Source::BuiltIn { name: name.clone() }
+        } else {
+            data::library::Source::Code
+        };
+        app.open_puzzle(load(&name)?, source);
+    }
+    for key in keys {
+        if app.handle(key) == app::Flow::Quit {
+            break;
+        }
+    }
+    put!(out, "{}", app::run::snapshot(&app, width, height));
+    Ok(())
 }

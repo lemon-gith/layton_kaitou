@@ -68,7 +68,8 @@ pub enum Context {
 
 pub fn table(context: Context) -> &'static [Binding] {
     match context {
-        Context::Home | Context::List => MENU,
+        Context::Home => HOME,
+        Context::List => MENU,
         Context::Placeholder => PLACEHOLDER,
         Context::Game => GAME,
         Context::Pause => PAUSE,
@@ -81,6 +82,12 @@ const MENU: &[Binding] = &[
     bind(&[DOWN, Key::Tab], "", "", Action::Down, false),
     bind(&[Key::Enter], "enter", "open", Action::Choose, true),
     bind(&[Key::Esc], "esc", "back", Action::Back, true),
+];
+
+const HOME: &[Binding] = &[
+    bind(&[UP, Key::BackTab], "↑ ↓", "choose", Action::Up, true),
+    bind(&[DOWN, Key::Tab], "", "", Action::Down, false),
+    bind(&[Key::Enter], "enter", "open", Action::Choose, true),
 ];
 
 const PLACEHOLDER: &[Binding] = &[bind(&[Key::Esc, Key::Enter], "esc", "back", Action::Back, true)];
@@ -119,7 +126,7 @@ mod tests {
 
     #[test]
     fn no_key_is_bound_twice_in_a_context() {
-        for context in [Context::Home, Context::Placeholder, Context::Game, Context::Pause, Context::Help] {
+        for context in [Context::Home, Context::List, Context::Placeholder, Context::Game, Context::Pause, Context::Help] {
             let keys: Vec<Key> = table(context).iter().flat_map(|b| b.keys.iter().copied()).collect();
             for (i, k) in keys.iter().enumerate() {
                 assert!(!keys[i + 1..].contains(k), "{k:?} bound twice in {context:?}");

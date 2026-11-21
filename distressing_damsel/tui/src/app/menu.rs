@@ -5,6 +5,8 @@ pub struct Item<T> {
     pub label: String,
     pub letter: Option<char>,
     pub enabled: bool,
+    /// Shown beside a disabled item, saying why.
+    pub note: Option<&'static str>,
     pub value: T,
 }
 
@@ -49,7 +51,12 @@ impl<T: Copy> Menu<T> {
 }
 
 pub fn item<T>(label: impl Into<String>, letter: Option<char>, enabled: bool, value: T) -> Item<T> {
-    Item { label: label.into(), letter, enabled, value }
+    Item { label: label.into(), letter, enabled, note: None, value }
+}
+
+/// A disabled item for something not built yet.
+pub fn not_yet<T>(label: impl Into<String>, letter: Option<char>, value: T) -> Item<T> {
+    Item { label: label.into(), letter, enabled: false, note: Some("not yet"), value }
 }
 
 #[cfg(test)]
