@@ -34,7 +34,8 @@ pub fn grain_strength(level: u8) -> f32 {
 pub struct Settings {
     /// dark, light, escape-dark, escape-light or liberation.
     pub theme: String,
-    /// Texture, from 0 (smooth) to 3 (strongest); 2 is the theme's own.
+    /// Texture, from 0 (smooth) to 3 (strongest); 2 is the theme as
+    /// designed. Only textured themes use it.
     pub grain: u8,
     pub labels: Labels,
     /// Outline where the key block has to go.
@@ -51,7 +52,7 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             theme: "escape-dark".into(),
-            grain: 2,
+            grain: 1,
             labels: Labels::OnDemand,
             show_goal: false,
             grid: true,

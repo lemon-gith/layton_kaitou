@@ -84,7 +84,7 @@ or wherever `$DD_CONFIG` points). `dd settings` shows them and
 
 ```toml
 theme = "escape-dark"
-grain = 2             # texture: 0 smooth to 3 strongest; 2 is the theme's own
+grain = 1             # texture, 0 to 3, for textured themes; 2 is as designed
 labels = "on-demand"  # or "always", "off"
 show_goal = false     # outline where the key block has to go
 grid = true           # outline empty cells

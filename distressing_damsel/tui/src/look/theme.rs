@@ -266,6 +266,14 @@ pub const THEMES: [Theme; 5] = [
     },
 ];
 
+impl Theme {
+    /// Whether the theme has texture for the grain setting to adjust. The
+    /// settings screen only offers grain for these.
+    pub fn textured(&self) -> bool {
+        self.grain > 0.0
+    }
+}
+
 pub fn by_name(name: &str) -> Option<&'static Theme> {
     THEMES.iter().find(|t| t.name == name)
 }
