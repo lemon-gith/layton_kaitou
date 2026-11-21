@@ -1,6 +1,6 @@
 //! Colour themes.
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Rgb(pub u8, pub u8, pub u8);
 
 impl Rgb {
@@ -46,9 +46,16 @@ pub enum Grain {
 pub struct Theme {
     pub name: &'static str,
     pub dark: bool,
+    /// Behind and around the box.
+    pub backdrop: Rgb,
 
     pub frame: Rgb,
     pub frame_grain: Grain,
+    /// Frame thickness in pixels on the sides, top and bottom. Top plus
+    /// bottom must be odd so the image comes out a whole number of rows.
+    pub frame_size: (usize, usize, usize),
+    /// Grooves, beading and studs cut into the frame.
+    pub carved: bool,
     pub floor: Rgb,
     pub floor_grain: Grain,
     /// How strongly empty cells are outlined, 0 for not at all.
@@ -60,15 +67,18 @@ pub struct Theme {
 
     /// Colours for block classes, in order of first appearance.
     pub blocks: &'static [Rgb],
-    /// Colour for blocks that have a goal.
+    /// Colour for the block that has to escape.
     pub key: Rgb,
     pub block_grain: Grain,
     /// Highlight and shadow on block edges, 0 for flat.
     pub bevel: f32,
-    /// Strength of every grain, 0 to 1.
+    /// Lacquer: a sheen across the top of each block and a glint in its
+    /// corner. 0 for none.
+    pub gloss: f32,
+    /// Strength of every grain at the default setting, 0 to 1.
     pub grain: f32,
 
-    /// Goal outline and the exit marked in the frame.
+    /// Goal outline, when shown.
     pub goal: Rgb,
     /// Selection outline.
     pub accent: Rgb,
@@ -76,31 +86,78 @@ pub struct Theme {
     pub text_on_light: Rgb,
 }
 
-pub const THEMES: [Theme; 4] = [
+/// Blue, green and purple first, then colours for bigger puzzles.
+const FLAT_DARK: &[Rgb] = &[
+    Rgb::hex(0x5b8fd9),
+    Rgb::hex(0x55ad6e),
+    Rgb::hex(0x9a7fd6),
+    Rgb::hex(0xe0954a),
+    Rgb::hex(0x8b929c),
+    Rgb::hex(0xdcdfe4),
+    Rgb::hex(0x47ad9b),
+    Rgb::hex(0x5a606b),
+];
+const FLAT_LIGHT: &[Rgb] = &[
+    Rgb::hex(0x6f9fe6),
+    Rgb::hex(0x6cc283),
+    Rgb::hex(0xb29ae8),
+    Rgb::hex(0xf0a95e),
+    Rgb::hex(0x9aa1ab),
+    Rgb::hex(0xfbfbfc),
+    Rgb::hex(0x5fbfac),
+    Rgb::hex(0x5f6672),
+];
+const STONE_DARK: &[Rgb] = &[
+    Rgb::hex(0x4d7ea6),
+    Rgb::hex(0x4b9572),
+    Rgb::hex(0x7b5ba3),
+    Rgb::hex(0xc4853a),
+    Rgb::hex(0x7d838c),
+    Rgb::hex(0xd6cfbd),
+    Rgb::hex(0x3d8c92),
+    Rgb::hex(0x4a4f57),
+];
+const STONE_LIGHT: &[Rgb] = &[
+    Rgb::hex(0x6a9cc9),
+    Rgb::hex(0x68b48c),
+    Rgb::hex(0x9b7cc4),
+    Rgb::hex(0xdea15a),
+    Rgb::hex(0x9aa0a8),
+    Rgb::hex(0xf4efe3),
+    Rgb::hex(0x5aaab0),
+    Rgb::hex(0x5d636c),
+];
+const LACQUER: &[Rgb] = &[
+    Rgb::hex(0x3a6fb8),
+    Rgb::hex(0x35925a),
+    Rgb::hex(0x7449ab),
+    Rgb::hex(0xd6832a),
+    Rgb::hex(0x858c96),
+    Rgb::hex(0xe8dfca),
+    Rgb::hex(0x24918f),
+    Rgb::hex(0x393d45),
+];
+
+pub const THEMES: [Theme; 5] = [
     Theme {
         name: "dark",
         dark: true,
+        backdrop: Rgb::hex(0x121418),
         frame: Rgb::hex(0x343a46),
         frame_grain: Grain::Smooth,
+        frame_size: (4, 3, 4),
+        carved: false,
         floor: Rgb::hex(0x1b1e24),
         floor_grain: Grain::Smooth,
         floor_grid: 0.18,
         shadow: 0.0,
         wall: Rgb::hex(0x343a46),
         wall_grain: Grain::Smooth,
-        blocks: &[
-            Rgb::hex(0x5b8fd9),
-            Rgb::hex(0x47ad9b),
-            Rgb::hex(0xc9a43a),
-            Rgb::hex(0x9a7fd6),
-            Rgb::hex(0x6faa5c),
-            Rgb::hex(0xd0835e),
-            Rgb::hex(0x5fa8c9),
-            Rgb::hex(0xc67aa8),
-        ],
+        blocks: FLAT_DARK,
         key: Rgb::hex(0xe0525a),
         block_grain: Grain::Smooth,
         bevel: 0.0,
+        gloss: 0.0,
         grain: 0.0,
         goal: Rgb::hex(0xe0525a),
         accent: Rgb::hex(0xf2f2f2),
@@ -110,27 +167,22 @@ pub const THEMES: [Theme; 4] = [
     Theme {
         name: "light",
         dark: false,
+        backdrop: Rgb::hex(0xe4e6ea),
         frame: Rgb::hex(0xb4bac5),
         frame_grain: Grain::Smooth,
+        frame_size: (4, 3, 4),
+        carved: false,
         floor: Rgb::hex(0xf1f2f5),
         floor_grain: Grain::Smooth,
         floor_grid: 0.07,
         shadow: 0.0,
         wall: Rgb::hex(0xb4bac5),
         wall_grain: Grain::Smooth,
-        blocks: &[
-            Rgb::hex(0x6f9fe6),
-            Rgb::hex(0x5fbfac),
-            Rgb::hex(0xe6c252),
-            Rgb::hex(0xb29ae8),
-            Rgb::hex(0x86c271),
-            Rgb::hex(0xeca079),
-            Rgb::hex(0x76c0dd),
-            Rgb::hex(0xe193c3),
-        ],
+        blocks: FLAT_LIGHT,
         key: Rgb::hex(0xe2545d),
         block_grain: Grain::Smooth,
         bevel: 0.0,
+        gloss: 0.0,
         grain: 0.0,
         goal: Rgb::hex(0xd9434d),
         accent: Rgb::hex(0x1d2230),
@@ -140,27 +192,22 @@ pub const THEMES: [Theme; 4] = [
     Theme {
         name: "escape-dark",
         dark: true,
+        backdrop: Rgb::hex(0x17110d),
         frame: Rgb::hex(0x5c3b22),
         frame_grain: Grain::Wood,
+        frame_size: (4, 3, 4),
+        carved: false,
         floor: Rgb::hex(0x2b221c),
         floor_grain: Grain::Speckle,
         floor_grid: 0.12,
         shadow: 0.35,
         wall: Rgb::hex(0x4e3220),
         wall_grain: Grain::Wood,
-        blocks: &[
-            Rgb::hex(0x4d7ea6),
-            Rgb::hex(0x4b9572),
-            Rgb::hex(0x7b5ba3),
-            Rgb::hex(0x3d8c92),
-            Rgb::hex(0xa98544),
-            Rgb::hex(0x8c6b5c),
-            Rgb::hex(0x5f7fb8),
-            Rgb::hex(0x8f5e86),
-        ],
-        key: Rgb::hex(0xc2562f),
+        blocks: STONE_DARK,
+        key: Rgb::hex(0xc0453a),
         block_grain: Grain::Speckle,
         bevel: 0.28,
+        gloss: 0.0,
         grain: 1.0,
         goal: Rgb::hex(0xf0b648),
         accent: Rgb::hex(0xffe39a),
@@ -170,32 +217,52 @@ pub const THEMES: [Theme; 4] = [
     Theme {
         name: "escape-light",
         dark: false,
+        backdrop: Rgb::hex(0xefe6d6),
         frame: Rgb::hex(0xa8743f),
         frame_grain: Grain::Wood,
+        frame_size: (4, 3, 4),
+        carved: false,
         floor: Rgb::hex(0xdccaa6),
         floor_grain: Grain::Speckle,
         floor_grid: 0.07,
         shadow: 0.22,
         wall: Rgb::hex(0x9a6a3a),
         wall_grain: Grain::Wood,
-        blocks: &[
-            Rgb::hex(0x6a9cc9),
-            Rgb::hex(0x68b48c),
-            Rgb::hex(0x9b7cc4),
-            Rgb::hex(0x5aaab0),
-            Rgb::hex(0xcfa456),
-            Rgb::hex(0xae8c78),
-            Rgb::hex(0x7d9bd3),
-            Rgb::hex(0xb57ea8),
-        ],
-        key: Rgb::hex(0xd8633a),
+        blocks: STONE_LIGHT,
+        key: Rgb::hex(0xd4513f),
         block_grain: Grain::Speckle,
         bevel: 0.3,
+        gloss: 0.0,
         grain: 0.85,
         goal: Rgb::hex(0xb8710f),
         accent: Rgb::hex(0x3a2210),
         text: Rgb::hex(0xfffaf0),
         text_on_light: Rgb::hex(0x2e1c0e),
+    },
+    Theme {
+        name: "heirloom",
+        dark: true,
+        backdrop: Rgb::hex(0x120c09),
+        frame: Rgb::hex(0x6e3d20),
+        frame_grain: Grain::Wood,
+        frame_size: (6, 4, 5),
+        carved: true,
+        floor: Rgb::hex(0x2a1d15),
+        floor_grain: Grain::Speckle,
+        floor_grid: 0.1,
+        shadow: 0.4,
+        wall: Rgb::hex(0x5e3319),
+        wall_grain: Grain::Wood,
+        blocks: LACQUER,
+        key: Rgb::hex(0xc8352e),
+        block_grain: Grain::Speckle,
+        bevel: 0.32,
+        gloss: 0.34,
+        grain: 0.75,
+        goal: Rgb::hex(0xf2c14e),
+        accent: Rgb::hex(0xffe7a3),
+        text: Rgb::hex(0xfff8ec),
+        text_on_light: Rgb::hex(0x24150b),
     },
 ];
 

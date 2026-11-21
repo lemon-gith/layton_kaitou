@@ -52,6 +52,9 @@ pub struct PuzzleSpec {
     pub blocks: BTreeMap<char, BlockAttrs>,
     /// All of these must hold at once.
     pub goals: Vec<GoalSpec>,
+    /// Side of the board the key block leaves by once the puzzle is solved.
+    /// Only for single-target puzzles; inferred when not given.
+    pub exit: Option<Dir>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -74,6 +77,9 @@ pub enum SpecError {
     /// Two targets claim the same cell.
     GoalOverlap(char, char),
     TooManyBlocks,
+    /// An exit was given for a puzzle with several targets, or on a side the
+    /// target does not touch.
+    BadExit,
     Layout(LayoutError),
     /// A share code that cannot be read.
     BadCode,
@@ -101,6 +107,10 @@ impl fmt::Display for SpecError {
             SpecError::GoalOutOfBounds(l) => write!(f, "the goal for block {l} is off the board or inside a wall"),
             SpecError::GoalOverlap(a, b) => write!(f, "the goals for blocks {a} and {b} overlap"),
             SpecError::TooManyBlocks => write!(f, "too many blocks of one kind (limit 255)"),
+            SpecError::BadExit => write!(
+                f,
+                "the exit must be on a side of the board that the puzzle's only target touches"
+            ),
             SpecError::Layout(e) => write!(f, "{e}"),
             SpecError::BadCode => write!(f, "not a valid puzzle code"),
         }
@@ -137,6 +147,8 @@ pub struct Puzzle {
     pub start: Position,
     /// Indexed by [`crate::BlockId`], in label order.
     pub blocks: Vec<BlockInfo>,
+    /// Side the key block leaves by when solved, if it has a way out.
+    pub exit: Option<Dir>,
 }
 
 impl PuzzleSpec {
@@ -288,6 +300,25 @@ impl PuzzleSpec {
             }
             targets.push((goal.block, info.class, cell_of(ax as u8, goal.y), mask));
         }
+        let exit = match targets.as_slice() {
+            [(_, _, _, mask)] => {
+                let touches = |dir: Dir| -> bool {
+                    cells(*mask).any(|c| {
+                        let (x, y) = ((c % w) as i16, (c / w) as i16);
+                        let (dx, dy) = dir.delta();
+                        let (nx, ny) = (x + dx as i16, y + dy as i16);
+                        nx < 0 || ny < 0 || nx >= w as i16 || ny >= h as i16
+                    })
+                };
+                match self.exit {
+                    Some(dir) if touches(dir) => Some(dir),
+                    Some(_) => return Err(SpecError::BadExit),
+                    None => [Dir::Down, Dir::Right, Dir::Up, Dir::Left].into_iter().find(|&d| touches(d)),
+                }
+            }
+            _ if self.exit.is_some() => return Err(SpecError::BadExit),
+            _ => None,
+        };
         let mut parts: Vec<Goal> = targets
             .iter()
             .map(|&(_, class, anchor, _)| Goal::BlockAt { class, anchor })
@@ -315,6 +346,7 @@ impl PuzzleSpec {
             layout: Arc::new(layout),
             start,
             blocks,
+            exit,
         };
         Ok((puzzle, warnings))
     }
@@ -380,6 +412,7 @@ impl PuzzleSpec {
             w.write(goal.x as u32, 8);
             w.write(goal.y as u32, 8);
         }
+        w.write(self.exit.map_or(0, |d| d.index() as u32 + 1), 3);
         w.finish();
         Ok(format!("{CODE_PREFIX}{}", base64_encode(&bytes)))
     }
@@ -439,7 +472,11 @@ impl PuzzleSpec {
             let block = *labels.get(read(8)? as usize).ok_or(SpecError::BadCode)?;
             goals.push(GoalSpec { block, x: read(8)? as u8, y: read(8)? as u8 });
         }
-        Ok(PuzzleSpec { width, height, cells, blocks, goals, ..PuzzleSpec::default() })
+        let exit = match r.read(3) {
+            Some(n @ 1..=4) => Some(Dir::ALL[n as usize - 1]),
+            _ => None,
+        };
+        Ok(PuzzleSpec { width, height, cells, blocks, goals, exit, ..PuzzleSpec::default() })
     }
 }
 

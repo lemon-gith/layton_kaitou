@@ -12,5 +12,5 @@
 pub mod paint;
 pub mod theme;
 
-pub use paint::{paint, Canvas, Glyph, PaintOptions};
+pub use paint::{exit_frames, paint, Canvas, Glyph, PaintOptions};
 pub use theme::{Rgb, Theme, THEMES};

@@ -23,6 +23,8 @@ version = "0.1.0"
 dependencies = [
  "dd_engine",
  "dd_solver",
+ "serde",
+ "toml",
 ]
 
 [[package]]

@@ -66,6 +66,31 @@ axis = "horizontal"  # or "vertical"; omit for free movement
 
 Boards are limited to 64 cells in this version.
 
+A puzzle with a single target can name the side the key block leaves by once
+solved, with a top-level `exit = "down"` (or `up`, `left`, `right`). Without
+it, the exit is the edge the target touches (preferring down, right, up,
+left), and a target away from every edge has no exit.
+
+## Looks and settings
+
+`dd preview <puzzle>` draws a puzzle in 24-bit colour in each theme:
+`dark`, `light`, `escape-dark`, `escape-light` and `heirloom` (lacquered
+blocks in a carved box). `--exit` solves the puzzle and plays the key block's
+exit; `dd help` lists the other options.
+
+Settings live in `~/.config/dd/settings.toml` (or `$XDG_CONFIG_HOME/dd/`,
+or wherever `$DD_CONFIG` points). `dd settings` shows them and
+`dd settings init` writes the defaults:
+
+```toml
+theme = "escape-dark"
+grain = 1.0           # texture: 0 smooth, 1 the theme's own, up to 2
+labels = "on-demand"  # or "always", "off"
+show_goal = false     # outline where the key block has to go
+scale = 6             # characters per cell across
+animations = true     # play the exit when a puzzle is solved
+```
+
 ## Counting moves
 
 A move is one drag: a block taken along any path while everything else stays

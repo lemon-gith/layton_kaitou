@@ -17,7 +17,9 @@
 //! ```
 //!
 //! `at` is the column and row, counted from zero at the top left, where the
-//! top-left corner of the block's bounding box must end up. Use `[[goal]]`
+//! top-left corner of the block's bounding box must end up. An optional
+//! top-level `exit = "down"` (or up, left, right) names the side the key block
+//! leaves by once solved; it is worked out from the target when left out. Use `[[goal]]`
 //! tables for several targets. A `[blocks.XYZ]` table applies to every block
 //! named in its key.
 
@@ -26,7 +28,7 @@ use std::fmt;
 
 use serde::Deserialize;
 
-use crate::geometry::Axis;
+use crate::geometry::{Axis, Dir};
 use crate::spec::{BlockAttrs, GoalSpec, PuzzleSpec, SpecError};
 
 #[derive(Debug)]
@@ -67,6 +69,16 @@ struct PuzzleFile {
     goal: Goals,
     #[serde(default)]
     blocks: BTreeMap<String, BlockFile>,
+    exit: Option<ExitFile>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum ExitFile {
+    Up,
+    Down,
+    Left,
+    Right,
 }
 
 #[derive(Deserialize)]
@@ -102,6 +114,12 @@ pub fn parse(source: &str) -> Result<PuzzleSpec, FileError> {
     let mut spec = PuzzleSpec::from_grid(&file.grid)?;
     spec.name = file.name;
     spec.description = file.description;
+    spec.exit = file.exit.map(|e| match e {
+        ExitFile::Up => Dir::Up,
+        ExitFile::Down => Dir::Down,
+        ExitFile::Left => Dir::Left,
+        ExitFile::Right => Dir::Right,
+    });
 
     let goals = match file.goal {
         Goals::One(goal) => vec![goal],
@@ -144,6 +162,15 @@ pub fn write(spec: &PuzzleSpec) -> String {
         out.push_str(&format!("description = {}\n", quote(&spec.description)));
     }
     out.push_str(&format!("grid = \"\"\"\n{}\"\"\"\n", spec.grid_string()));
+    if let Some(dir) = spec.exit {
+        let name = match dir {
+            Dir::Up => "up",
+            Dir::Down => "down",
+            Dir::Left => "left",
+            Dir::Right => "right",
+        };
+        out.push_str(&format!("exit = \"{name}\"\n"));
+    }
     for goal in &spec.goals {
         let header = if spec.goals.len() == 1 { "[goal]" } else { "[[goal]]" };
         out.push_str(&format!(

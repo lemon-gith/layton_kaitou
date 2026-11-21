@@ -4,9 +4,10 @@
 
 mod look;
 mod render;
+mod settings;
 
 use std::fmt::Write as _;
-use std::io::Write as _;
+use std::io::{IsTerminal as _, Write as _};
 use std::process::ExitCode;
 use std::time::Instant;
 
@@ -31,11 +32,18 @@ usage: dd <command>
   export <puzzle>          print the puzzle as a file
   preview <puzzle> [opts]  draw the puzzle in colour (needs a 24-bit terminal)
 
-preview options:
-  --theme <name|all>  dark, light, escape-dark or escape-light (default all)
-  --scale <n>         characters per cell across, even, 4 or more (default 6)
+  settings [init]          show your settings and where they live, or
+                           write a settings file with the defaults
+
+preview options (defaults come from your settings):
+  --theme <name|all>  dark, light, escape-dark, escape-light, heirloom, or
+                      all (the default)
+  --scale <n>         characters per cell across, even, 4 or more
+  --grain <x>         texture strength, 0 to 2
   --labels            write each block's label on it
+  --goal              outline where the key block has to go
   --select <label>    outline one block as if selected
+  --exit              solve the puzzle and play the key block's exit
 
 <puzzle> is a built-in name, a path to a .toml file, or a share code.
 
@@ -94,6 +102,7 @@ fn run(args: &[String], out: &mut String) -> Result<(), String> {
             Ok(())
         }
         Some("preview") => preview(&load(puzzle_arg()?)?, &args[2..], out),
+        Some("settings") => show_settings(args.get(1).map(String::as_str), out),
         Some("help" | "--help" | "-h") | None => {
             put!(out, "{USAGE}");
             Ok(())
@@ -265,11 +274,40 @@ fn parse<T: std::str::FromStr>(text: &str) -> Result<T, String> {
     text.parse().map_err(|_| format!("{text:?} is not a number"))
 }
 
+fn show_settings(action: Option<&str>, out: &mut String) -> Result<(), String> {
+    let path = settings::Settings::path();
+    let shown = path.as_ref().map_or("(no home directory)".into(), |p| p.display().to_string());
+    match action {
+        None => {
+            let current = settings::Settings::load()?;
+            let exists = path.as_ref().is_some_and(|p| p.exists());
+            say!(out, "# {shown}{}", if exists { "" } else { " (not created; these are the defaults)" });
+            put!(out, "{}", current.to_toml());
+            Ok(())
+        }
+        Some("init") => {
+            let path = path.ok_or("no home directory to put settings in")?;
+            if path.exists() {
+                return Err(format!("{shown} already exists"));
+            }
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+            }
+            std::fs::write(&path, settings::Settings::default().to_toml()).map_err(|e| format!("{shown}: {e}"))?;
+            say!(out, "wrote {shown}");
+            Ok(())
+        }
+        Some(other) => Err(format!("unknown settings action {other:?}")),
+    }
+}
+
 fn preview(spec: &PuzzleSpec, flags: &[String], out: &mut String) -> Result<(), String> {
+    let settings = settings::Settings::load()?;
     let mut themes: Vec<&look::Theme> = look::THEMES.iter().collect();
-    let mut options = look::PaintOptions { scale: 6, ..Default::default() };
-    let mut labels = false;
+    let mut options = settings.paint_options();
+    let mut labels = settings.labels == settings::Labels::Always;
     let mut select = None;
+    let mut exit = false;
     let mut flags = flags.iter();
     while let Some(flag) = flags.next() {
         let mut value = || flags.next().ok_or(format!("{flag} needs a value"));
@@ -281,13 +319,16 @@ fn preview(spec: &PuzzleSpec, flags: &[String], out: &mut String) -> Result<(), 
                 }
             }
             "--scale" => options.scale = parse(value()?)?,
+            "--grain" => options.grain = parse(value()?)?,
             "--labels" => labels = true,
+            "--goal" => options.show_goal = true,
             "--select" => select = Some(value()?.clone()),
+            "--exit" => exit = true,
             other => return Err(format!("unknown option {other:?}")),
         }
     }
     let puzzle = build(spec, out)?;
-    let game = Game::new(puzzle);
+    let mut game = Game::new(puzzle);
     let blocks = &game.puzzle().blocks;
     if labels {
         options.labels = blocks.iter().enumerate().map(|(i, b)| (i, b.label.to_string())).collect();
@@ -296,10 +337,41 @@ fn preview(spec: &PuzzleSpec, flags: &[String], out: &mut String) -> Result<(), 
         let id = blocks.iter().position(|b| b.label.to_string() == label);
         options.selected = Some(id.ok_or(format!("no block {label}"))?);
     }
-    for theme in themes {
-        say!(out, "{}", theme.name);
-        put!(out, "{}", look::paint(&game, theme, &options).to_ansi());
-        say!(out, "");
+    if !exit {
+        for theme in themes {
+            say!(out, "{}", theme.name);
+            put!(out, "{}", look::paint(&game, theme, &options).to_ansi());
+            say!(out, "");
+        }
+        return Ok(());
+    }
+
+    let mut solver = Solver::new(game.puzzle().layout.clone(), game.puzzle().start, Options::default());
+    if solver.run() != Outcome::Solved {
+        return Err("the puzzle has no solution to play out".into());
+    }
+    for mv in solver.solution().expect("solved").moves {
+        game.apply(mv).map_err(|e| e.to_string())?;
+    }
+    let theme = themes[0];
+    let frames = look::exit_frames(&game, theme, &options);
+    if std::io::stdout().is_terminal() {
+        // Play it: draw each frame over the last.
+        let mut stdout = std::io::stdout().lock();
+        let height = frames[0].height;
+        for (i, frame) in frames.iter().enumerate() {
+            if i > 0 {
+                let _ = write!(stdout, "\x1b[{height}A");
+            }
+            let _ = stdout.write_all(frame.to_ansi().as_bytes());
+            let _ = stdout.flush();
+            std::thread::sleep(std::time::Duration::from_millis(if i == 0 { 500 } else { 45 }));
+        }
+    } else {
+        // Not a terminal: frames separated by form feeds, for other tools.
+        for frame in frames {
+            put!(out, "{}\x0c", frame.to_ansi());
+        }
     }
     Ok(())
 }

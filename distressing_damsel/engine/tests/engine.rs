@@ -339,3 +339,26 @@ fn loading_a_position_keeps_block_counts() {
     assert_eq!(covered, game.layout().occupancy(&last));
     assert_eq!(game.move_count(), 0);
 }
+
+#[test]
+fn exits_are_inferred_given_and_checked() {
+    use dd_engine::Dir;
+    assert_eq!(puzzle(KLOTSKI).exit, Some(Dir::Down));
+    assert_eq!(puzzle(GRIDLOCK).exit, Some(Dir::Right));
+    // Top-right corner: down and left are not touched; right wins over up.
+    assert_eq!(puzzle(ODD_SHAPES).exit, Some(Dir::Right));
+    assert_eq!(puzzle(TRADING_PLACES).exit, None);
+    let (middle, _) = from_grid("A..\n...\n...", ('A', 1, 1)).unwrap();
+    assert_eq!(middle.exit, None);
+
+    let given = ODD_SHAPES.replace("[goal]", "exit = \"up\"\n\n[goal]");
+    assert_eq!(puzzle(&given).exit, Some(Dir::Up));
+    let spec = file::parse(&given).unwrap();
+    assert_eq!(file::parse(&file::write(&spec)).unwrap(), spec);
+    assert_eq!(PuzzleSpec::from_code(&spec.to_code().unwrap()).unwrap().exit, Some(Dir::Up));
+
+    let wrong = ODD_SHAPES.replace("[goal]", "exit = \"down\"\n\n[goal]");
+    assert_eq!(file::parse(&wrong).unwrap().build().unwrap_err(), SpecError::BadExit);
+    let several = TRADING_PLACES.replacen("[[goal]]", "exit = \"up\"\n\n[[goal]]", 1);
+    assert_eq!(file::parse(&several).unwrap().build().unwrap_err(), SpecError::BadExit);
+}
