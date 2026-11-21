@@ -330,7 +330,7 @@ fn paint_image(game: &Game, theme: &Theme, options: &PaintOptions, hidden: Optio
     }
 
     // The exit: where a lone target meets the side it leaves by, the frame
-    // takes the goal colour, except along its outer edge.
+    // takes the key block's colour, except along its outer edge.
     if let (true, Some(dir)) = (single_key, game.puzzle().exit) {
         let (dx, dy) = dir.delta();
         for y in top..top + h * s {
@@ -348,7 +348,7 @@ fn paint_image(game: &Game, theme: &Theme, options: &PaintOptions, hidden: Optio
                     }
                     let i = py as usize * pw + px as usize;
                     if owner[i] == Owner::Frame {
-                        pixels[i] = pixels[i].mix(theme.goal, 0.8);
+                        pixels[i] = pixels[i].mix(theme.key, 0.8);
                     }
                 }
             }
@@ -795,6 +795,26 @@ mod tests {
         assert_eq!(exiting_block(&unsolved), None);
         let solved = game("A..\n...", ('A', 0, 0));
         assert_eq!(exiting_block(&solved), Some(0));
+    }
+
+    #[test]
+    fn exit_marker_takes_the_key_blocks_colour() {
+        // A lone block heading for the right edge: the frame beside the
+        // target is tinted towards the key colour, not the goal colour.
+        let game = game("A..\n...\n...", ('A', 2, 1));
+        for theme in &THEMES {
+            let canvas = paint(&game, theme, &PaintOptions::default());
+            let (fs, ft, _) = theme.frame_size;
+            let s = 6;
+            // Middle of the target cell's row, one character into the frame.
+            let row = (ft + 1 + s + s / 2) / 2;
+            let x = fs + 1 + 3 * s + 1;
+            let g = canvas.glyphs[row * canvas.width + x];
+            let near = |c: crate::look::Rgb, to: crate::look::Rgb| {
+                (c.0 as i32 - to.0 as i32).abs() + (c.1 as i32 - to.1 as i32).abs() + (c.2 as i32 - to.2 as i32).abs()
+            };
+            assert!(near(g.bg, theme.key) < near(g.bg, theme.frame), "{}: {:?}", theme.name, g.bg);
+        }
     }
 
     #[test]
