@@ -240,7 +240,7 @@ pub const THEMES: [Theme; 5] = [
         text_on_light: Rgb::hex(0x2e1c0e),
     },
     Theme {
-        name: "heirloom",
+        name: "liberation",
         dark: true,
         backdrop: Rgb::hex(0x120c09),
         frame: Rgb::hex(0x6e3d20),

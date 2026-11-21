@@ -36,14 +36,16 @@ usage: dd <command>
                            write a settings file with the defaults
 
 preview options (defaults come from your settings):
-  --theme <name|all>  dark, light, escape-dark, escape-light, heirloom, or
-                      all (the default)
+  --theme <name|all>  dark, light, escape-dark, escape-light, liberation,
+                      or all (the default)
   --scale <n>         characters per cell across, even, 4 or more
-  --grain <x>         texture strength, 0 to 2
+  --grain <0-3>       texture strength; 2 is the theme's own
   --labels            write each block's label on it
   --goal              outline where the key block has to go
+  --grid / --no-grid  outline empty cells, or not
   --select <label>    outline one block as if selected
-  --exit              solve the puzzle and play the key block's exit
+  --play              animate the shortest solution, then the exit
+  --exit              jump to the solved position and animate the exit
 
 <puzzle> is a built-in name, a path to a .toml file, or a share code.
 
@@ -307,7 +309,7 @@ fn preview(spec: &PuzzleSpec, flags: &[String], out: &mut String) -> Result<(), 
     let mut options = settings.paint_options();
     let mut labels = settings.labels == settings::Labels::Always;
     let mut select = None;
-    let mut exit = false;
+    let (mut play, mut exit) = (false, false);
     let mut flags = flags.iter();
     while let Some(flag) = flags.next() {
         let mut value = || flags.next().ok_or(format!("{flag} needs a value"));
@@ -319,10 +321,19 @@ fn preview(spec: &PuzzleSpec, flags: &[String], out: &mut String) -> Result<(), 
                 }
             }
             "--scale" => options.scale = parse(value()?)?,
-            "--grain" => options.grain = parse(value()?)?,
+            "--grain" => {
+                let level: u8 = parse(value()?)?;
+                if level > 3 {
+                    return Err("--grain takes 0, 1, 2 or 3".into());
+                }
+                options.grain = settings::grain_strength(level);
+            }
             "--labels" => labels = true,
             "--goal" => options.show_goal = true,
+            "--grid" => options.grid = true,
+            "--no-grid" => options.grid = false,
             "--select" => select = Some(value()?.clone()),
+            "--play" => play = true,
             "--exit" => exit = true,
             other => return Err(format!("unknown option {other:?}")),
         }
@@ -337,7 +348,7 @@ fn preview(spec: &PuzzleSpec, flags: &[String], out: &mut String) -> Result<(), 
         let id = blocks.iter().position(|b| b.label.to_string() == label);
         options.selected = Some(id.ok_or(format!("no block {label}"))?);
     }
-    if !exit {
+    if !play && !exit {
         for theme in themes {
             say!(out, "{}", theme.name);
             put!(out, "{}", look::paint(&game, theme, &options).to_ansi());
@@ -350,28 +361,76 @@ fn preview(spec: &PuzzleSpec, flags: &[String], out: &mut String) -> Result<(), 
     if solver.run() != Outcome::Solved {
         return Err("the puzzle has no solution to play out".into());
     }
-    for mv in solver.solution().expect("solved").moves {
-        game.apply(mv).map_err(|e| e.to_string())?;
-    }
+    let moves = solver.solution().expect("solved").moves;
+    let mut player = Player::new(out);
     let theme = themes[0];
-    let frames = look::exit_frames(&game, theme, &options);
-    if std::io::stdout().is_terminal() {
-        // Play it: draw each frame over the last.
-        let mut stdout = std::io::stdout().lock();
-        let height = frames[0].height;
-        for (i, frame) in frames.iter().enumerate() {
-            if i > 0 {
-                let _ = write!(stdout, "\x1b[{height}A");
-            }
-            let _ = stdout.write_all(frame.to_ansi().as_bytes());
-            let _ = stdout.flush();
-            std::thread::sleep(std::time::Duration::from_millis(if i == 0 { 500 } else { 45 }));
+    if exit {
+        for &mv in &moves {
+            game.apply(mv).map_err(|e| e.to_string())?;
         }
     } else {
-        // Not a terminal: frames separated by form feeds, for other tools.
-        for frame in frames {
-            put!(out, "{}\x0c", frame.to_ansi());
+        player.hold(&look::paint(&game, theme, &options), 600);
+        for &mv in &moves {
+            let path = game.layout().drag_path(game.position(), mv.from, mv.to).unwrap_or_default();
+            let block = game.apply(mv).map_err(|e| e.to_string())?;
+            let millis = look::slide_millis(path.len());
+            for t in player.times(millis) {
+                let offset = look::slide_offset(&path, options.scale, t);
+                player.frame(&look::paint_moving(&game, theme, &options, look::Motion { block, offset, opacity: 1.0 }));
+            }
+        }
+    }
+    player.hold(&look::paint(&game, theme, &options), 300);
+    if let Some(block) = look::exiting_block(&game) {
+        for t in player.times(look::EXIT_MILLIS) {
+            let opacity = look::exit_opacity(t);
+            player.frame(&look::paint_moving(&game, theme, &options, look::Motion { block, offset: (0, 0), opacity }));
         }
     }
     Ok(())
+}
+
+/// Shows animation frames: in place on a terminal, at a fixed rate; or, when
+/// output is not a terminal, as ANSI frames separated by form feeds, one per
+/// tick, for other tools to turn into video.
+struct Player<'a> {
+    out: &'a mut String,
+    live: bool,
+    height: Option<usize>,
+}
+
+impl<'a> Player<'a> {
+    const TICK_MILLIS: u64 = 33;
+
+    fn new(out: &'a mut String) -> Self {
+        Player { out, live: std::io::stdout().is_terminal(), height: None }
+    }
+
+    /// Frame times from just after 0 to 1 for an animation lasting `millis`.
+    fn times(&self, millis: u64) -> Vec<f32> {
+        let n = millis.div_ceil(Self::TICK_MILLIS).max(1);
+        (1..=n).map(|i| i as f32 / n as f32).collect()
+    }
+
+    fn frame(&mut self, canvas: &look::Canvas) {
+        if self.live {
+            let mut stdout = std::io::stdout().lock();
+            if let Some(h) = self.height {
+                let _ = write!(stdout, "\x1b[{h}A");
+            }
+            let _ = stdout.write_all(canvas.to_ansi().as_bytes());
+            let _ = stdout.flush();
+            self.height = Some(canvas.height);
+            std::thread::sleep(std::time::Duration::from_millis(Self::TICK_MILLIS));
+        } else {
+            put!(self.out, "{}\x0c", canvas.to_ansi());
+        }
+    }
+
+    /// Shows a frame for about `millis`.
+    fn hold(&mut self, canvas: &look::Canvas, millis: u64) {
+        for _ in 0..millis.div_ceil(Self::TICK_MILLIS) {
+            self.frame(canvas);
+        }
+    }
 }

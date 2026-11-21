@@ -21,16 +21,26 @@ pub enum Labels {
     Off,
 }
 
+/// Texture multiplier for each grain level. Level 2 is each theme as
+/// designed; past 1.5 times the patterns start to break up.
+pub const GRAIN_LEVELS: [f32; 4] = [0.0, 0.5, 1.0, 1.5];
+
+pub fn grain_strength(level: u8) -> f32 {
+    GRAIN_LEVELS[(level as usize).min(3)]
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
-    /// dark, light, escape-dark, escape-light or heirloom.
+    /// dark, light, escape-dark, escape-light or liberation.
     pub theme: String,
-    /// Texture strength: 0 is smooth, 1 the theme's own, up to 2.
-    pub grain: f32,
+    /// Texture, from 0 (smooth) to 3 (strongest); 2 is the theme's own.
+    pub grain: u8,
     pub labels: Labels,
     /// Outline where the key block has to go.
     pub show_goal: bool,
+    /// Outline empty cells.
+    pub grid: bool,
     /// Characters per board cell across: even, 4 or more.
     pub scale: usize,
     /// Play the key block's exit when a puzzle is solved.
@@ -41,9 +51,10 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             theme: "escape-dark".into(),
-            grain: 1.0,
+            grain: 2,
             labels: Labels::OnDemand,
             show_goal: false,
+            grid: true,
             scale: 6,
             animations: true,
         }
@@ -83,8 +94,8 @@ impl Settings {
             let names: Vec<&str> = look::THEMES.iter().map(|t| t.name).collect();
             return Err(format!("no theme called {:?} (try {})", self.theme, names.join(", ")));
         }
-        if !(0.0..=2.0).contains(&self.grain) {
-            return Err("grain must be between 0 and 2".into());
+        if self.grain > 3 {
+            return Err("grain must be 0, 1, 2 or 3".into());
         }
         if self.scale < 4 || self.scale % 2 == 1 {
             return Err("scale must be an even number, 4 or more".into());
@@ -106,7 +117,8 @@ impl Settings {
         look::PaintOptions {
             scale: self.scale,
             show_goal: self.show_goal,
-            grain: self.grain,
+            grid: self.grid,
+            grain: grain_strength(self.grain),
             ..Default::default()
         }
     }
@@ -124,17 +136,20 @@ mod tests {
     #[test]
     fn round_trips_and_validates() {
         let custom = Settings {
-            theme: "heirloom".into(),
-            grain: 0.4,
+            theme: "liberation".into(),
+            grain: 0,
             labels: Labels::Always,
             show_goal: true,
+            grid: false,
             scale: 8,
             animations: false,
         };
         assert_eq!(Settings::parse(&custom.to_toml()).unwrap(), custom);
         assert!(Settings::parse("labels = \"on-demand\"").is_ok());
         assert!(Settings::parse("theme = \"nope\"").is_err());
-        assert!(Settings::parse("grain = 3.0").is_err());
+        assert!(Settings::parse("grain = 3").is_ok());
+        assert!(Settings::parse("grain = 4").is_err());
+        assert!(Settings::parse("grain = 1.5").is_err());
         assert!(Settings::parse("scale = 5").is_err());
         assert!(Settings::parse("colour = 1").is_err());
     }

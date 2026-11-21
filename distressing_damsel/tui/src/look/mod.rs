@@ -12,5 +12,8 @@
 pub mod paint;
 pub mod theme;
 
-pub use paint::{exit_frames, paint, Canvas, Glyph, PaintOptions};
+pub use paint::{
+    exit_opacity, exiting_block, paint, paint_moving, slide_millis, slide_offset, Canvas, Glyph, Motion, PaintOptions,
+    EXIT_MILLIS,
+};
 pub use theme::{Rgb, Theme, THEMES};

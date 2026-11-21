@@ -1,9 +1,15 @@
-//! Paints a game onto a [`Canvas`], and the animation of a solved puzzle's
-//! key block leaving the box.
+//! Paints a game onto a [`Canvas`].
+//!
+//! Motion is painted the same way as a still board: [`paint_moving`] draws
+//! one block shifted by some pixels from where the game says it is, and/or
+//! partly faded out. The interface calls it each frame with the offset and
+//! opacity for that moment ([`slide_offset`] gives the offset along a drag),
+//! so nothing is pre-rendered, and the terminal backend only redraws the
+//! characters that changed.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use dd_engine::{bit, cells, Dir, Game, Mask};
+use dd_engine::{bit, Dir, Game, Mask};
 
 use super::theme::{grain, Rgb, Theme};
 
@@ -63,6 +69,8 @@ pub struct PaintOptions {
     pub selected: Option<usize>,
     /// Outline where the key block has to go.
     pub show_goal: bool,
+    /// Outline empty cells.
+    pub grid: bool,
     /// Multiplies the theme's texture: 0 is smooth, 1 the theme's own.
     pub grain: f32,
 }
@@ -74,44 +82,35 @@ impl Default for PaintOptions {
             labels: HashMap::new(),
             selected: None,
             show_goal: false,
+            grid: true,
             grain: 1.0,
         }
     }
 }
 
+/// One block drawn away from where the game has it.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct Motion {
+    pub block: usize,
+    /// Pixels from the block's position in the game: one pixel is one
+    /// character across or half a character down.
+    pub offset: (isize, isize),
+    /// 1 is fully drawn, 0 is gone.
+    pub opacity: f32,
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum Owner {
-    Backdrop,
     Frame,
-    /// The gap in the frame the key block leaves by.
-    Door,
     Floor,
     Wall,
     Face(usize),
-    /// The ledge outside the door.
-    Platform,
-    /// The raised edge around the ledge.
-    Rail,
 }
 
 impl Owner {
     fn raised(self) -> bool {
-        matches!(self, Owner::Frame | Owner::Wall | Owner::Face(_) | Owner::Rail)
+        !matches!(self, Owner::Floor)
     }
-}
-
-/// Where the door is and how far a leaving block travels.
-#[derive(Copy, Clone, Debug)]
-struct Exit {
-    dir: Dir,
-    /// Span of the door across the exit direction, in image coordinates.
-    lo: usize,
-    hi: usize,
-    /// Length of the ledge, including its end rail.
-    ledge: usize,
-    /// Image coordinate the leaving block's leading face edge stops at:
-    /// a row for up and down, a column for left and right.
-    stop: isize,
 }
 
 /// A painted board before it is packed into characters.
@@ -120,18 +119,8 @@ struct Image {
     height: usize,
     pixels: Vec<Rgb>,
     owner: Vec<Owner>,
-    exit: Option<Exit>,
-}
-
-/// The block the goal is about, if the puzzle has a single target and that
-/// block is on it.
-fn key_block(game: &Game) -> Option<usize> {
-    let targets = game.layout().goal().targets();
-    let &[(class, anchor)] = targets.as_slice() else {
-        return None;
-    };
-    (0..game.block_count())
-        .find(|&b| game.puzzle().blocks[b].class == class && game.anchor(b) == Some(anchor))
+    /// Pixels of the selection ring.
+    ring: HashSet<usize>,
 }
 
 fn paint_image(game: &Game, theme: &Theme, options: &PaintOptions, hidden: Option<usize>) -> Image {
@@ -139,74 +128,11 @@ fn paint_image(game: &Game, theme: &Theme, options: &PaintOptions, hidden: Optio
     let s = options.scale.max(4) & !1;
     let (w, h) = (layout.width() as usize, layout.height() as usize);
     let (fs, ft, fb) = theme.frame_size;
-    let bw = fs + 1 + w * s + fs;
-    let bh = ft + 1 + h * s + fb;
+    let (pw, ph) = (fs + 1 + w * s + fs, ft + 1 + h * s + fb);
+    // One pixel of floor before the first cell matches the gap every cell
+    // leaves after itself.
+    let (left, top) = (fs + 1, ft + 1);
     let g = theme.grain * options.grain.max(0.0);
-
-    let targets = layout.goal().targets();
-    let goal_cells: Mask = targets
-        .iter()
-        .fold(0, |acc, &(class, anchor)| acc | layout.block_mask(class, anchor));
-
-    // The door and ledge, sized to the key block.
-    let mut extension = 0;
-    let mut exit = game.puzzle().exit.zip(targets.first()).map(|(dir, &(class, anchor))| {
-        let xy: Vec<(usize, usize)> = cells(layout.block_mask(class, anchor))
-            .map(|c| {
-                let (x, y) = layout.xy(c);
-                (x as usize, y as usize)
-            })
-            .collect();
-        let min_x = xy.iter().map(|c| c.0).min().unwrap_or(0);
-        let max_x = xy.iter().map(|c| c.0).max().unwrap_or(0);
-        let min_y = xy.iter().map(|c| c.1).min().unwrap_or(0);
-        let max_y = xy.iter().map(|c| c.1).max().unwrap_or(0);
-        let vertical = matches!(dir, Dir::Up | Dir::Down);
-        let on_edge: Vec<usize> = xy
-            .iter()
-            .filter(|&&(x, y)| match dir {
-                Dir::Down => y == h - 1,
-                Dir::Up => y == 0,
-                Dir::Right => x == w - 1,
-                Dir::Left => x == 0,
-            })
-            .map(|&(x, y)| if vertical { x } else { y })
-            .collect();
-        let first = on_edge.iter().copied().min().unwrap_or(0);
-        let last = on_edge.iter().copied().max().unwrap_or(0);
-        let depth = if vertical { (max_y - min_y + 1) * s - 1 } else { (max_x - min_x + 1) * s - 1 };
-        // A floor margin each side of the block, then the end rail.
-        let ledge = depth + 3;
-        extension = ledge + 1;
-        if vertical && extension % 2 == 1 {
-            extension += 1;
-        }
-        let origin = if vertical { fs + 1 } else { ft + 1 };
-        Exit { dir, lo: origin + first * s, hi: origin + last * s + s - 1, ledge, stop: 0 }
-    });
-    let (ox, oy, iw, ih) = match exit.map(|e| e.dir) {
-        None => (0, 0, bw, bh),
-        Some(Dir::Down) => (0, 0, bw, bh + extension),
-        Some(Dir::Up) => (0, extension, bw, bh + extension),
-        Some(Dir::Right) => (0, 0, bw + extension, bh),
-        Some(Dir::Left) => (extension, 0, bw + extension, bh),
-    };
-    if let Some(e) = exit.as_mut() {
-        if matches!(e.dir, Dir::Up | Dir::Down) {
-            e.lo += ox;
-            e.hi += ox;
-        } else {
-            e.lo += oy;
-            e.hi += oy;
-        }
-        e.stop = match e.dir {
-            Dir::Down => (oy + bh + 1) as isize,
-            Dir::Up => oy as isize - 2,
-            Dir::Right => (ox + bw + 1) as isize,
-            Dir::Left => ox as isize - 2,
-        };
-    }
-    let (left, top) = (ox + fs + 1, oy + ft + 1);
 
     let block_of: Vec<Option<usize>> = (0..layout.n_cells())
         .map(|c| game.block_at(c as u8).filter(|&b| Some(b) != hidden))
@@ -224,46 +150,14 @@ fn paint_image(game: &Game, theme: &Theme, options: &PaintOptions, hidden: Optio
     };
 
     // Who owns each pixel.
-    let mut owner = vec![Owner::Backdrop; iw * ih];
-    for y in 0..ih {
-        for x in 0..iw {
-            let o = &mut owner[y * iw + x];
-            let inside = x >= ox && x < ox + bw && y >= oy && y < oy + bh;
-            if !inside {
-                if let Some(e) = exit {
-                    let (d, p) = match e.dir {
-                        Dir::Down => (y as isize - (oy + bh) as isize, x),
-                        Dir::Up => (oy as isize - 1 - y as isize, x),
-                        Dir::Right => (x as isize - (ox + bw) as isize, y),
-                        Dir::Left => (ox as isize - 1 - x as isize, y),
-                    };
-                    let d = d as usize;
-                    if d < e.ledge && p + 1 >= e.lo && p <= e.hi {
-                        *o = if p >= e.lo && p < e.hi && d < e.ledge - 1 { Owner::Platform } else { Owner::Rail };
-                    }
-                }
-                continue;
-            }
-            let (bx0, by0) = (x - ox, y - oy);
-            if bx0 < fs || bx0 >= bw - fs || by0 < ft || by0 >= bh - fb {
+    let mut owner = vec![Owner::Floor; pw * ph];
+    for y in 0..ph {
+        for x in 0..pw {
+            let o = &mut owner[y * pw + x];
+            if x < fs || x >= pw - fs || y < ft || y >= ph - fb {
                 *o = Owner::Frame;
-                if let Some(e) = exit {
-                    let on_side = match e.dir {
-                        Dir::Down => by0 >= bh - fb,
-                        Dir::Up => by0 < ft,
-                        Dir::Right => bx0 >= bw - fs,
-                        Dir::Left => bx0 < fs,
-                    };
-                    let p = if matches!(e.dir, Dir::Up | Dir::Down) { x } else { y };
-                    if on_side && p >= e.lo && p < e.hi {
-                        *o = Owner::Door;
-                    }
-                }
                 continue;
             }
-            *o = Owner::Floor;
-            // One pixel of floor before the first cell matches the gap every
-            // cell leaves after itself.
             let bx = x as isize - left as isize;
             let by = y as isize - top as isize;
             let (cx, cy) = (bx.max(0) / s as isize, by.max(0) / s as isize);
@@ -288,13 +182,17 @@ fn paint_image(game: &Game, theme: &Theme, options: &PaintOptions, hidden: Optio
         }
     }
     let at = |x: isize, y: isize| -> Owner {
-        if x < 0 || y < 0 || x >= iw as isize || y >= ih as isize {
-            Owner::Backdrop
+        if x < 0 || y < 0 || x >= pw as isize || y >= ph as isize {
+            Owner::Frame
         } else {
-            owner[y as usize * iw + x as usize]
+            owner[y as usize * pw + x as usize]
         }
     };
 
+    let targets = layout.goal().targets();
+    let goal_cells: Mask = targets
+        .iter()
+        .fold(0, |acc, &(class, anchor)| acc | layout.block_mask(class, anchor));
     let in_goal = |x: isize, y: isize| -> bool {
         let (bx, by) = (x - left as isize, y - top as isize);
         if bx < 0 || by < 0 || bx >= (w * s) as isize || by >= (h * s) as isize {
@@ -313,61 +211,39 @@ fn paint_image(game: &Game, theme: &Theme, options: &PaintOptions, hidden: Optio
         !(lx == s - 1 && !in_goal(x + 1, y)) && !(ly == s - 1 && !in_goal(x, y + 1))
     };
 
-    let key_classes: Vec<u8> = targets.iter().map(|t| t.0).collect();
-    let single_key = key_classes.len() == 1;
+    let single_key = targets.len() == 1;
+    let key_class = targets.first().map(|t| t.0);
     let colour_of_block = |block: usize| -> Rgb {
         let class = game.puzzle().blocks[block].class;
-        if single_key && key_classes[0] == class {
+        if single_key && key_class == Some(class) {
             return theme.key;
         }
-        let earlier = (0..class).filter(|c| !single_key || *c != key_classes[0]).count();
+        let earlier = (0..class).filter(|&c| !single_key || Some(c) != key_class).count();
         theme.blocks[earlier % theme.blocks.len()]
     };
 
     // Each block face's bounding box, for gloss.
-    let mut boxes: HashMap<usize, (usize, usize, usize, usize)> = HashMap::new();
+    let mut boxes: HashMap<usize, (usize, usize, usize)> = HashMap::new();
     if theme.gloss > 0.0 {
-        for y in 0..ih {
-            for x in 0..iw {
-                if let Owner::Face(b) = owner[y * iw + x] {
-                    let e = boxes.entry(b).or_insert((x, y, x, y));
-                    *e = (e.0.min(x), e.1.min(y), e.2.max(x), e.3.max(y));
+        for y in 0..ph {
+            for x in 0..pw {
+                if let Owner::Face(b) = owner[y * pw + x] {
+                    let e = boxes.entry(b).or_insert((x, y, y));
+                    *e = (e.0.min(x), e.1.min(y), e.2.max(y));
                 }
             }
         }
     }
 
-    let floor_colour = |x: usize, y: usize, grid: bool| -> Rgb {
-        let (xi, yi) = (x as isize, y as isize);
-        let mut c = theme.floor.shade(grain(theme.floor_grain, x as i32, y as i32, 7) * 0.25 * g);
-        if grid {
-            let (bx, by) = (xi - left as isize, yi - top as isize);
-            if bx < 0 || by < 0 || bx as usize % s == s - 1 || by as usize % s == s - 1 {
-                c = c.shade(if theme.dark { theme.floor_grid } else { -theme.floor_grid });
-            }
-        }
-        if theme.shadow > 0.0 {
-            let cast = at(xi, yi - 1).raised() as u8 + at(xi - 1, yi).raised() as u8;
-            if cast > 0 {
-                c = c.shade(-theme.shadow * if cast == 2 { 1.2 } else { 1.0 });
-            } else if at(xi - 1, yi - 1).raised() {
-                c = c.shade(-theme.shadow * 0.5);
-            }
-        }
-        c
-    };
-
-    let mut pixels = vec![theme.backdrop; iw * ih];
-    for y in 0..ih {
-        for x in 0..iw {
+    let mut pixels = vec![theme.floor; pw * ph];
+    for y in 0..ph {
+        for x in 0..pw {
             let (xi, yi) = (x as isize, y as isize);
-            let here = owner[y * iw + x];
-            pixels[y * iw + x] = match here {
-                Owner::Backdrop => theme.backdrop,
+            let here = owner[y * pw + x];
+            pixels[y * pw + x] = match here {
                 Owner::Frame => {
-                    let (bx0, by0) = (x - ox, y - oy);
                     // Mitred frame: grain follows the nearest outer edge.
-                    let d = [bx0, bw - 1 - bx0, by0, bh - 1 - by0];
+                    let d = [x, pw - 1 - x, y, ph - 1 - y];
                     let side = (0..4).min_by_key(|&i| d[i]).unwrap();
                     let thick = [fs, fs, ft, fb][side];
                     let along = if side < 2 { y } else { x } as i32;
@@ -385,17 +261,6 @@ fn paint_image(game: &Game, theme: &Theme, options: &PaintOptions, hidden: Optio
                     }
                     c
                 }
-                Owner::Rail => {
-                    let along = if matches!(exit.map(|e| e.dir), Some(Dir::Up | Dir::Down)) { y } else { x };
-                    let mut c = theme.frame.shade(grain(theme.frame_grain, along as i32, x as i32 ^ y as i32, 5) * 0.22 * g);
-                    if !at(xi, yi - 1).raised() || !at(xi - 1, yi).raised() {
-                        c = c.shade(theme.bevel * 0.6);
-                    } else if !at(xi, yi + 1).raised() || !at(xi + 1, yi).raised() {
-                        c = c.shade(-theme.bevel * 0.8);
-                    }
-                    c
-                }
-                Owner::Door | Owner::Platform => floor_colour(x, y, false),
                 Owner::Wall => {
                     let mut c = theme.wall.shade(grain(theme.wall_grain, x as i32, y as i32, 11) * 0.22 * g);
                     let solid = |o: Owner| matches!(o, Owner::Wall | Owner::Frame);
@@ -409,12 +274,25 @@ fn paint_image(game: &Game, theme: &Theme, options: &PaintOptions, hidden: Optio
                     c
                 }
                 Owner::Floor => {
-                    let mut c = floor_colour(x, y, true);
+                    let mut c = theme.floor.shade(grain(theme.floor_grain, x as i32, y as i32, 7) * 0.25 * g);
+                    let (bx, by) = (xi - left as isize, yi - top as isize);
+                    let grid_line = bx < 0 || by < 0 || bx as usize % s == s - 1 || by as usize % s == s - 1;
+                    if options.grid && grid_line {
+                        c = c.shade(if theme.dark { theme.floor_grid } else { -theme.floor_grid });
+                    }
                     if options.show_goal && goal_face(xi, yi) {
                         let edge = [(0, -1), (0, 1), (-1, 0), (1, 0)]
                             .iter()
                             .any(|&(dx, dy)| !goal_face(xi + dx, yi + dy));
                         c = c.mix(theme.goal, if edge { 0.7 } else { 0.12 });
+                    }
+                    if theme.shadow > 0.0 {
+                        let cast = at(xi, yi - 1).raised() as u8 + at(xi - 1, yi).raised() as u8;
+                        if cast > 0 {
+                            c = c.shade(-theme.shadow * if cast == 2 { 1.2 } else { 1.0 });
+                        } else if at(xi - 1, yi - 1).raised() {
+                            c = c.shade(-theme.shadow * 0.5);
+                        }
                     }
                     c
                 }
@@ -430,7 +308,7 @@ fn paint_image(game: &Game, theme: &Theme, options: &PaintOptions, hidden: Optio
                             _ => c,
                         };
                     }
-                    if let Some(&(x0, y0, _, y1)) = boxes.get(&block) {
+                    if let Some(&(x0, y0, y1)) = boxes.get(&block) {
                         c = gloss(c, theme.gloss, x - x0, y - y0, y1 - y0 + 1);
                     }
                     c
@@ -439,23 +317,49 @@ fn paint_image(game: &Game, theme: &Theme, options: &PaintOptions, hidden: Optio
         }
     }
 
-    // Selection: a ring just outside the block.
-    if let Some(sel) = options.selected.filter(|&b| Some(b) != hidden) {
-        let face = |x: isize, y: isize| at(x, y) == Owner::Face(sel);
-        let mut ring = Vec::new();
-        for y in 0..ih as isize {
-            for x in 0..iw as isize {
-                if !face(x, y) && (-1..=1).any(|dy| (-1..=1).any(|dx| face(x + dx, y + dy))) {
-                    ring.push(y as usize * iw + x as usize);
+    // The exit: where a lone target meets the side it leaves by, the frame
+    // takes the goal colour, except along its outer edge.
+    if let (true, Some(dir)) = (single_key, game.puzzle().exit) {
+        let (dx, dy) = dir.delta();
+        for y in top..top + h * s {
+            for x in left..left + w * s {
+                if !goal_face(x as isize, y as isize) {
+                    continue;
+                }
+                // Walk out through the gap and the frame.
+                let (mut px, mut py) = (x as isize, y as isize);
+                loop {
+                    px += dx as isize;
+                    py += dy as isize;
+                    if px <= 0 || py <= 0 || px >= pw as isize - 1 || py >= ph as isize - 1 || goal_face(px, py) {
+                        break;
+                    }
+                    let i = py as usize * pw + px as usize;
+                    if owner[i] == Owner::Frame {
+                        pixels[i] = pixels[i].mix(theme.goal, 0.8);
+                    }
                 }
             }
         }
-        for i in ring {
+    }
+
+    // Selection: a ring just outside the block.
+    let mut ring = HashSet::new();
+    if let Some(sel) = options.selected.filter(|&b| Some(b) != hidden) {
+        let face = |x: isize, y: isize| at(x, y) == Owner::Face(sel);
+        for y in 0..ph as isize {
+            for x in 0..pw as isize {
+                if !face(x, y) && (-1..=1).any(|dy| (-1..=1).any(|dx| face(x + dx, y + dy))) {
+                    ring.insert(y as usize * pw + x as usize);
+                }
+            }
+        }
+        for &i in &ring {
             pixels[i] = theme.accent;
         }
     }
 
-    Image { width: iw, height: ih, pixels, owner, exit }
+    Image { width: pw, height: ph, pixels, owner, ring }
 }
 
 /// Lacquer on a block face: a sheen fading down from the top and a glint
@@ -500,14 +404,58 @@ fn carve(c: Rgb, side: usize, d: [usize; 4], thick: usize, along: i32) -> Rgb {
     c
 }
 
-/// Packs pixels into characters and writes labels on the blocks that own
-/// the pixels in `owner`.
-fn to_canvas(image: &Image, pixels: &[Rgb], theme: &Theme, labels: &HashMap<usize, String>) -> Canvas {
-    let (pw, cw, ch) = (image.width, image.width, image.height / 2);
+/// Where a label of `len` characters goes on a block: the run of whole
+/// characters nearest the face's centre of mass. That point can be off the
+/// block (an L's corner), so only runs entirely on the face count. Returns
+/// the pixel column and character row.
+fn label_spot(image: &Image, block: usize, len: usize) -> Option<(usize, usize)> {
+    let pw = image.width;
+    let face = |x: usize, y: usize| image.owner[y * pw + x] == Owner::Face(block);
+    let (mut sx, mut sy, mut n) = (0.0, 0.0, 0.0);
+    for y in 0..image.height {
+        for x in 0..pw {
+            if face(x, y) {
+                sx += x as f32;
+                sy += y as f32;
+                n += 1.0;
+            }
+        }
+    }
+    if n == 0.0 || len == 0 {
+        return None;
+    }
+    let (mx, my) = (sx / n, sy / n);
+    let mut best: Option<(f32, usize, usize)> = None;
+    for row in 0..image.height / 2 {
+        for x in 0..pw.saturating_sub(len - 1) {
+            if !(0..len).all(|i| face(x + i, row * 2) && face(x + i, row * 2 + 1)) {
+                continue;
+            }
+            let dx = x as f32 + (len as f32 - 1.0) / 2.0 - mx;
+            let dy = row as f32 * 2.0 + 0.5 - my;
+            let d = dx * dx + dy * dy;
+            if best.is_none_or(|b| d < b.0) {
+                best = Some((d, x, row));
+            }
+        }
+    }
+    best.map(|(_, x, row)| (x, row))
+}
+
+/// A label to write at a given character position.
+struct Label<'a> {
+    x: usize,
+    row: usize,
+    text: &'a str,
+}
+
+/// Packs pixels into characters and writes the labels.
+fn to_canvas(width: usize, height: usize, pixels: &[Rgb], theme: &Theme, labels: &[Label]) -> Canvas {
+    let (cw, ch) = (width, height / 2);
     let mut glyphs = Vec::with_capacity(cw * ch);
     for row in 0..ch {
         for x in 0..cw {
-            let (upper, lower) = (pixels[row * 2 * pw + x], pixels[(row * 2 + 1) * pw + x]);
+            let (upper, lower) = (pixels[row * 2 * width + x], pixels[(row * 2 + 1) * width + x]);
             glyphs.push(if upper == lower {
                 Glyph { ch: ' ', fg: upper, bg: upper, bold: false }
             } else {
@@ -515,139 +463,146 @@ fn to_canvas(image: &Image, pixels: &[Rgb], theme: &Theme, labels: &HashMap<usiz
             });
         }
     }
-
-    // Each label goes on the run of whole characters nearest the face's
-    // centre of mass. That point can be off the block (an L's corner), so
-    // only runs entirely on the face are considered.
-    for (&block, text) in labels {
-        let len = text.chars().count();
-        if len == 0 {
-            continue;
-        }
-        let face = |x: usize, y: usize| image.owner[y * pw + x] == Owner::Face(block);
-        let (mut sx, mut sy, mut n) = (0.0, 0.0, 0.0);
-        for y in 0..image.height {
-            for x in 0..pw {
-                if face(x, y) {
-                    sx += x as f32;
-                    sy += y as f32;
-                    n += 1.0;
-                }
+    for label in labels {
+        for (i, c) in label.text.chars().enumerate() {
+            let x = label.x + i;
+            if x >= cw || label.row >= ch {
+                continue;
             }
-        }
-        if n == 0.0 {
-            continue;
-        }
-        let (mx, my) = (sx / n, sy / n);
-        let mut best: Option<(f32, usize, usize)> = None;
-        for row in 0..ch {
-            for x in 0..cw.saturating_sub(len - 1) {
-                if !(0..len).all(|i| face(x + i, row * 2) && face(x + i, row * 2 + 1)) {
-                    continue;
-                }
-                let dx = x as f32 + (len as f32 - 1.0) / 2.0 - mx;
-                let dy = row as f32 * 2.0 + 0.5 - my;
-                let d = dx * dx + dy * dy;
-                if best.is_none_or(|b| d < b.0) {
-                    best = Some((d, x, row));
-                }
-            }
-        }
-        if let Some((_, x, row)) = best {
-            for (i, c) in text.chars().enumerate() {
-                let bg = pixels[row * 2 * pw + x + i].mix(pixels[(row * 2 + 1) * pw + x + i], 0.5);
-                let fg = if bg.luma() > 0.62 { theme.text_on_light } else { theme.text };
-                glyphs[row * cw + x + i] = Glyph { ch: c, fg, bg, bold: true };
-            }
+            let bg = pixels[label.row * 2 * width + x].mix(pixels[(label.row * 2 + 1) * width + x], 0.5);
+            let fg = if bg.luma() > 0.62 { theme.text_on_light } else { theme.text };
+            glyphs[label.row * cw + x] = Glyph { ch: c, fg, bg, bold: true };
         }
     }
-
     Canvas { width: cw, height: ch, glyphs }
+}
+
+fn labels_for<'a>(image: &Image, labels: &'a HashMap<usize, String>, skip: Option<usize>) -> Vec<Label<'a>> {
+    labels
+        .iter()
+        .filter(|(&b, _)| Some(b) != skip)
+        .filter_map(|(&block, text)| {
+            label_spot(image, block, text.chars().count()).map(|(x, row)| Label { x, row, text })
+        })
+        .collect()
 }
 
 pub fn paint(game: &Game, theme: &Theme, options: &PaintOptions) -> Canvas {
     let image = paint_image(game, theme, options, None);
-    to_canvas(&image, &image.pixels, theme, &options.labels)
+    let labels = labels_for(&image, &options.labels, None);
+    to_canvas(image.width, image.height, &image.pixels, theme, &labels)
 }
 
-/// Frames of the key block leaving a solved puzzle: it slides out through
-/// the door onto the ledge and fades away. Puzzles with no door get a glint
-/// and a fade where the block stands. The last frame is the box without the
-/// block; every frame is the same size as [`paint`]'s canvas.
-///
-/// Returns just the still board if the puzzle is not solved or has several
-/// targets.
-pub fn exit_frames(game: &Game, theme: &Theme, options: &PaintOptions) -> Vec<Canvas> {
-    let options = PaintOptions { selected: None, ..options.clone() };
-    let Some(key) = key_block(game).filter(|_| game.is_solved()) else {
-        return vec![paint(game, theme, &options)];
-    };
-    let full = paint_image(game, theme, &options, None);
-    let empty = paint_image(game, theme, &options, Some(key));
-    let mut labels = options.labels.clone();
-    labels.remove(&key);
+/// Paints the board with one block shifted and/or faded; see [`Motion`].
+/// The block, its selection ring and its label move together, and it casts
+/// a shadow where it is drawn.
+pub fn paint_moving(game: &Game, theme: &Theme, options: &PaintOptions, motion: Motion) -> Canvas {
+    if motion.offset == (0, 0) && motion.opacity >= 1.0 {
+        return paint(game, theme, options);
+    }
+    let full = paint_image(game, theme, options, None);
+    let base = paint_image(game, theme, options, Some(motion.block));
+    let (w, h) = (full.width as isize, full.height as isize);
+    let opacity = motion.opacity.clamp(0.0, 1.0);
+    let (ox, oy) = motion.offset;
+    let inside = |x: isize, y: isize| x >= 0 && y >= 0 && x < w && y < h;
 
-    let block: Vec<(isize, isize, Rgb)> = (0..full.height)
-        .flat_map(|y| (0..full.width).map(move |x| (x, y)))
-        .filter(|&(x, y)| full.owner[y * full.width + x] == Owner::Face(key))
-        .map(|(x, y)| (x as isize, y as isize, full.pixels[y * full.width + x]))
-        .collect();
-    let frame = |offset: (isize, isize), fade: f32, glint: f32| -> Canvas {
-        let mut pixels = empty.pixels.clone();
-        for &(x, y, c) in &block {
-            let (nx, ny) = (x + offset.0, y + offset.1);
-            if nx < 0 || ny < 0 || nx >= empty.width as isize || ny >= empty.height as isize {
-                continue;
-            }
-            let i = ny as usize * empty.width + nx as usize;
-            pixels[i] = c.shade(glint).mix(pixels[i], fade);
-        }
-        to_canvas(&empty, &pixels, theme, &labels)
-    };
-
-    // The key block's label goes for the whole animation, so it does not
-    // vanish one frame in.
-    let mut frames = vec![to_canvas(&full, &full.pixels, theme, &labels)];
-    let fades = [0.15, 0.3, 0.5, 0.7, 0.85];
-    match empty.exit {
-        Some(exit) => {
-            let ys = block.iter().map(|b| b.1);
-            let xs = block.iter().map(|b| b.0);
-            let travel = match exit.dir {
-                Dir::Down => exit.stop - ys.min().unwrap_or(0),
-                Dir::Up => ys.max().unwrap_or(0) - exit.stop,
-                Dir::Right => exit.stop - xs.min().unwrap_or(0),
-                Dir::Left => xs.max().unwrap_or(0) - exit.stop,
-            };
-            let (dx, dy) = exit.dir.delta();
-            let steps = travel.max(8) as usize;
-            let mut last = 0;
-            for i in 1..=steps {
-                // Ease in and out.
-                let t = i as f32 / steps as f32;
-                let e = t * t * (3.0 - 2.0 * t);
-                let along = (e * travel as f32).round() as isize;
-                if along != last {
-                    frames.push(frame((dx as isize * along, dy as isize * along), 0.0, 0.0));
-                    last = along;
-                }
-            }
-            let offset = (dx as isize * travel, dy as isize * travel);
-            for f in fades {
-                frames.push(frame(offset, f, 0.0));
-            }
-        }
-        None => {
-            for glint in [0.15, 0.3, 0.15] {
-                frames.push(frame((0, 0), 0.0, glint));
-            }
-            for f in fades {
-                frames.push(frame((0, 0), f, 0.0));
+    // (x, y, colour, is face) for each pixel that travels with the block.
+    let mut moved: Vec<(isize, isize, Rgb, bool)> = Vec::new();
+    for y in 0..full.height {
+        for x in 0..full.width {
+            let i = y * full.width + x;
+            let face = full.owner[i] == Owner::Face(motion.block);
+            if face || (options.selected == Some(motion.block) && full.ring.contains(&i)) {
+                moved.push((x as isize + ox, y as isize + oy, full.pixels[i], face));
             }
         }
     }
-    frames.push(to_canvas(&empty, &empty.pixels, theme, &labels));
-    frames
+    let covered: HashSet<(isize, isize)> = moved.iter().map(|m| (m.0, m.1)).collect();
+    let mut pixels = base.pixels.clone();
+    // Shadow first, so the block is drawn over its own.
+    if theme.shadow > 0.0 {
+        let mut shaded = HashSet::new();
+        for &(x, y, _, face) in &moved {
+            for (sx, sy) in [(x + 1, y), (x, y + 1), (x + 1, y + 1)] {
+                if face && inside(sx, sy) && !covered.contains(&(sx, sy)) && shaded.insert((sx, sy)) {
+                    let i = sy as usize * full.width + sx as usize;
+                    if base.owner[i] == Owner::Floor {
+                        pixels[i] = pixels[i].shade(-theme.shadow * opacity);
+                    }
+                }
+            }
+        }
+    }
+    for &(x, y, c, _) in &moved {
+        if inside(x, y) {
+            let i = y as usize * full.width + x as usize;
+            pixels[i] = c.mix(pixels[i], 1.0 - opacity);
+        }
+    }
+
+    let mut labels = labels_for(&base, &options.labels, Some(motion.block));
+    if let Some(text) = options.labels.get(&motion.block).filter(|_| opacity >= 0.5) {
+        if let Some((x, row)) = label_spot(&full, motion.block, text.chars().count()) {
+            let (x, y) = (x as isize + ox, row as isize * 2 + oy);
+            if x >= 0 && y >= 0 {
+                labels.push(Label { x: x as usize, row: (y / 2) as usize, text });
+            }
+        }
+    }
+    to_canvas(full.width, full.height, &pixels, theme, &labels)
+}
+
+/// How long a slide along a drag path takes, in milliseconds: quick for one
+/// cell, a little longer for long drags.
+pub fn slide_millis(steps: usize) -> u64 {
+    (70 + 55 * steps as u64).min(420)
+}
+
+/// The offset to give [`Motion`] at time `t` (0 to 1) of a slide along
+/// `path`, a drag the game has already made. Starts at the block's old
+/// position and eases into its new one, following corners.
+pub fn slide_offset(path: &[Dir], scale: usize, t: f32) -> (isize, isize) {
+    let s = (scale.max(4) & !1) as f32;
+    let t = t.clamp(0.0, 1.0);
+    let eased = t * t * (3.0 - 2.0 * t);
+    // Distance still to travel, in cells, walked back from the end.
+    let mut left = (1.0 - eased) * path.len() as f32;
+    let (mut x, mut y) = (0.0f32, 0.0f32);
+    for dir in path.iter().rev() {
+        if left <= 0.0 {
+            break;
+        }
+        let part = left.min(1.0);
+        let (dx, dy) = dir.delta();
+        x -= dx as f32 * part * s;
+        y -= dy as f32 * part * s;
+        left -= part;
+    }
+    (x.round() as isize, y.round() as isize)
+}
+
+/// How long the key block's exit takes, in milliseconds.
+pub const EXIT_MILLIS: u64 = 900;
+
+/// Opacity at time `t` (0 to 1) of the key block's exit: it holds for a
+/// moment, then fades.
+pub fn exit_opacity(t: f32) -> f32 {
+    let t = ((t - 0.25) / 0.75).clamp(0.0, 1.0);
+    1.0 - t * t * (3.0 - 2.0 * t)
+}
+
+/// The block that leaves the box when the puzzle is solved: the only
+/// target's block, on its target.
+pub fn exiting_block(game: &Game) -> Option<usize> {
+    if !game.is_solved() {
+        return None;
+    }
+    let targets = game.layout().goal().targets();
+    let &[(class, anchor)] = targets.as_slice() else {
+        return None;
+    };
+    (0..game.block_count()).find(|&b| game.puzzle().blocks[b].class == class && game.anchor(b) == Some(anchor))
 }
 
 #[cfg(test)]
@@ -678,12 +633,13 @@ mod tests {
             let labels: HashMap<usize, String> = (0..game.block_count()).map(|b| (b, format!("{b}"))).collect();
             for theme in &THEMES {
                 for scale in [4, 6, 8, 12] {
-                    for show_goal in [false, true] {
+                    for (show_goal, grid) in [(false, true), (true, false)] {
                         let options = PaintOptions {
                             scale,
                             labels: labels.clone(),
                             selected: Some(0),
                             show_goal,
+                            grid,
                             grain: 1.5,
                         };
                         let canvas = paint(&game, theme, &options);
@@ -700,61 +656,109 @@ mod tests {
     }
 
     #[test]
-    fn goal_outline_is_optional() {
+    fn goal_outline_and_grid_are_optional() {
         let game = game("A..\n...", ('A', 2, 1));
         let theme = &THEMES[0];
         let plain = paint(&game, theme, &PaintOptions::default());
-        let shown = paint(&game, theme, &PaintOptions { show_goal: true, ..Default::default() });
-        assert_ne!(plain, shown);
+        assert_ne!(plain, paint(&game, theme, &PaintOptions { show_goal: true, ..Default::default() }));
+        assert_ne!(plain, paint(&game, theme, &PaintOptions { grid: false, ..Default::default() }));
     }
 
     #[test]
     fn grain_setting_scales_texture() {
         let game = game("A..\n...", ('A', 2, 1));
         let theme = &THEMES[2];
-        let smooth = paint(&game, theme, &PaintOptions { grain: 0.0, ..Default::default() });
-        let normal = paint(&game, theme, &PaintOptions::default());
-        assert_ne!(smooth, normal);
-        // With no grain, the middle of an empty cell is one flat colour.
-        let distinct: std::collections::HashSet<_> = smooth.glyphs.iter().map(|g| g.bg).collect();
-        let textured: std::collections::HashSet<_> = normal.glyphs.iter().map(|g| g.bg).collect();
-        assert!(distinct.len() < textured.len());
+        let colours = |grain| {
+            let canvas = paint(&game, theme, &PaintOptions { grain, ..Default::default() });
+            canvas.glyphs.iter().map(|g| g.bg).collect::<HashSet<_>>().len()
+        };
+        assert!(colours(0.0) < colours(1.0));
     }
 
     #[test]
-    fn exit_animation_slides_the_key_block_out() {
-        for (grid, goal, dir) in [
-            ("A..\n...\n...", ('A', 2, 1), Dir::Right),
-            ("..A\n...\n...", ('A', 0, 1), Dir::Left),
-            ("A..\n...\n...", ('A', 1, 2), Dir::Down),
-            ("...\n...\n..A", ('A', 1, 0), Dir::Up),
-        ] {
-            let mut game = game(grid, goal);
-            assert_eq!(game.puzzle().exit, Some(dir));
-            let still = paint(&game, &THEMES[2], &PaintOptions::default());
-            // Not solved yet: no animation.
-            assert_eq!(exit_frames(&game, &THEMES[2], &PaintOptions::default()), vec![still.clone()]);
-
-            let a = game.block_at(game.puzzle().blocks[0].start).unwrap();
-            game.drag_to(a, game.layout().goal().targets()[0].1).unwrap();
-            assert!(game.is_solved());
-            let frames = exit_frames(&game, &THEMES[2], &PaintOptions::default());
-            assert!(frames.len() > 10, "{dir:?}: {} frames", frames.len());
-            assert!(frames.iter().all(|f| f.width == still.width && f.height == still.height));
-            assert_eq!(frames[0], paint(&game, &THEMES[2], &PaintOptions::default()));
-            assert!(frames.windows(2).all(|w| w[0] != w[1]));
+    fn motion_without_offset_or_fade_is_the_plain_board() {
+        let game = game("AB.\n...", ('A', 2, 1));
+        let options = PaintOptions {
+            labels: HashMap::from([(0, "A".into()), (1, "B".into())]),
+            selected: Some(0),
+            ..Default::default()
+        };
+        for theme in &THEMES {
+            let motion = Motion { block: 0, offset: (0, 0), opacity: 1.0 };
+            assert_eq!(paint_moving(&game, theme, &options, motion), paint(&game, theme, &options));
         }
     }
 
     #[test]
-    fn puzzles_without_a_door_fade_in_place() {
-        // The target is in the middle of the board, so there is no way out;
-        // the block already sits on it.
-        let game = game("...\n.A.\n...", ('A', 1, 1));
-        assert_eq!(game.puzzle().exit, None);
-        assert!(game.is_solved());
-        let frames = exit_frames(&game, &THEMES[4], &PaintOptions::default());
-        assert!(frames.len() > 5);
-        assert_eq!(frames.last().unwrap().width, frames[0].width);
+    fn a_shifted_block_carries_its_label() {
+        let game = game("A..\n...", ('A', 2, 1));
+        let options = PaintOptions { labels: HashMap::from([(0, "A".into())]), ..Default::default() };
+        let theme = &THEMES[0];
+        let find = |c: &Canvas| c.glyphs.iter().position(|g| g.ch == 'A').unwrap();
+        let still = paint(&game, theme, &options);
+        let moved = paint_moving(&game, theme, &options, Motion { block: 0, offset: (3, 0), opacity: 1.0 });
+        assert_eq!(find(&moved), find(&still) + 3);
+        let faded = paint_moving(&game, theme, &options, Motion { block: 0, offset: (0, 0), opacity: 0.2 });
+        assert!(faded.glyphs.iter().all(|g| g.ch != 'A'));
+    }
+
+    #[test]
+    fn a_faded_out_block_looks_like_empty_floor() {
+        for theme in &THEMES {
+            // Grid off and no texture, so every empty floor pixel inside the
+            // board is the same colour except for shadows.
+            let options = PaintOptions { grid: false, grain: 0.0, ..Default::default() };
+            let game = game("...\n.A.\n...", ('A', 1, 1));
+            let gone = paint_moving(&game, theme, &options, Motion { block: 0, offset: (0, 0), opacity: 0.0 });
+            let (fs, ft, _) = theme.frame_size;
+            // The middle of the middle cell, compared with the middle of the
+            // top-middle cell, which is empty in both.
+            let s = 6;
+            let mid = |cx: usize, cy: usize| gone.glyphs[((ft + 1 + cy * s + s / 2) / 2) * gone.width + fs + 1 + cx * s + s / 2];
+            assert_eq!(mid(1, 1), mid(1, 0), "{}", theme.name);
+        }
+    }
+
+    #[test]
+    fn slides_follow_the_path_and_end_in_place() {
+        let path = [Dir::Down, Dir::Right, Dir::Right];
+        assert_eq!(slide_offset(&path, 6, 0.0), (-12, -6));
+        assert_eq!(slide_offset(&path, 6, 1.0), (0, 0));
+        // Halfway through a three-step drag the block is half-way along
+        // the middle step.
+        assert_eq!(slide_offset(&path, 6, 0.5), (-9, 0));
+        let mut last = slide_offset(&path, 6, 0.0);
+        for i in 1..=20 {
+            let now = slide_offset(&path, 6, i as f32 / 20.0);
+            assert!((now.0 - last.0).abs() + (now.1 - last.1).abs() <= 6);
+            last = now;
+        }
+        assert!(slide_millis(1) < slide_millis(3));
+        assert_eq!(slide_millis(50), 420);
+    }
+
+    #[test]
+    fn exit_fades_from_full_to_nothing() {
+        assert_eq!(exit_opacity(0.0), 1.0);
+        assert_eq!(exit_opacity(0.2), 1.0);
+        assert_eq!(exit_opacity(1.0), 0.0);
+        assert!((0.0..1.0).contains(&exit_opacity(0.6)));
+        let unsolved = game("A..\n...", ('A', 2, 1));
+        assert_eq!(exiting_block(&unsolved), None);
+        let solved = game("A..\n...", ('A', 0, 0));
+        assert_eq!(exiting_block(&solved), Some(0));
+    }
+
+    #[test]
+    fn exit_side_is_marked_in_the_frame() {
+        let down = game("A..\n...\n...", ('A', 1, 2));
+        let right = game("A..\n...\n...", ('A', 2, 1));
+        assert_eq!(down.puzzle().exit, Some(Dir::Down));
+        assert_eq!(right.puzzle().exit, Some(Dir::Right));
+        let theme = &THEMES[0];
+        let options = PaintOptions::default();
+        let (d, r) = (paint(&down, theme, &options), paint(&right, theme, &options));
+        let last_row = |c: &Canvas| c.glyphs[(c.height - 1) * c.width..].to_vec();
+        assert_ne!(last_row(&d), last_row(&r));
     }
 }

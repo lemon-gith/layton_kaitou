@@ -74,9 +74,9 @@ left), and a target away from every edge has no exit.
 ## Looks and settings
 
 `dd preview <puzzle>` draws a puzzle in 24-bit colour in each theme:
-`dark`, `light`, `escape-dark`, `escape-light` and `heirloom` (lacquered
-blocks in a carved box). `--exit` solves the puzzle and plays the key block's
-exit; `dd help` lists the other options.
+`dark`, `light`, `escape-dark`, `escape-light` and `liberation` (lacquered
+blocks in a carved box). `--play` animates the shortest solution and the key
+block's exit; `dd help` lists the other options.
 
 Settings live in `~/.config/dd/settings.toml` (or `$XDG_CONFIG_HOME/dd/`,
 or wherever `$DD_CONFIG` points). `dd settings` shows them and
@@ -84,11 +84,12 @@ or wherever `$DD_CONFIG` points). `dd settings` shows them and
 
 ```toml
 theme = "escape-dark"
-grain = 1.0           # texture: 0 smooth, 1 the theme's own, up to 2
+grain = 2             # texture: 0 smooth to 3 strongest; 2 is the theme's own
 labels = "on-demand"  # or "always", "off"
 show_goal = false     # outline where the key block has to go
+grid = true           # outline empty cells
 scale = 6             # characters per cell across
-animations = true     # play the exit when a puzzle is solved
+animations = true     # slide blocks and fade the key block out when solved
 ```
 
 ## Counting moves
