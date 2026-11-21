@@ -119,7 +119,7 @@ pub fn save(data_dir: &Path, code: &str, progress: &Progress) -> Result<(), Stri
 pub fn load(data_dir: &Path, code: &str, puzzle: &Puzzle) -> Result<Option<Progress>, String> {
     let path = progress_file(data_dir, code);
     let shown = path.display();
-    let Some(text) = fsio::read_optional(&path).map_err(|e| format!("{shown}: {e}"))? else {
+    let Some(text) = fsio::read_if_exists(&path).map_err(|e| format!("{shown}: {e}"))? else {
         return Ok(None);
     };
     let file: ProgressFile = toml::from_str(&text).map_err(|e| format!("{shown}: {}", e.message()))?;

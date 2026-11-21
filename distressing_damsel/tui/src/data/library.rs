@@ -40,7 +40,7 @@ pub fn puzzles_dir(data_dir: &Path) -> PathBuf {
 pub fn load_last(data_dir: &Path) -> Result<Option<LastPuzzle>, String> {
     let path = data_dir.join("session.toml");
     let shown = path.display();
-    match fsio::read_optional(&path).map_err(|e| format!("{shown}: {e}"))? {
+    match fsio::read_if_exists(&path).map_err(|e| format!("{shown}: {e}"))? {
         None => Ok(None),
         Some(text) => {
             let file: SessionFile = toml::from_str(&text).map_err(|e| format!("{shown}: {}", e.message()))?;
