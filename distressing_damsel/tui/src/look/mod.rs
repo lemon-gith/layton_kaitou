@@ -13,7 +13,7 @@ pub mod paint;
 pub mod theme;
 
 pub use paint::{
-    exit_opacity, exiting_block, paint, paint_moving, slide_millis, slide_offset, Canvas, Glyph, Motion, PaintOptions,
+    canvas_size, exit_opacity, exiting_block, paint, paint_moving, slide_millis, slide_offset, Canvas, Glyph, Motion, PaintOptions,
     EXIT_MILLIS,
 };
 pub use theme::{Rgb, Theme, THEMES};

@@ -27,6 +27,8 @@ local use.
 ## Usage
 
 ```bash
+cargo run --release              # start the game
+cargo run --release -- play klotski
 cargo run --release -- list
 cargo run --release -- show klotski
 cargo run --release -- solve klotski --alternatives 3

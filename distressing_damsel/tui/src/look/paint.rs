@@ -487,6 +487,15 @@ fn labels_for<'a>(image: &Image, labels: &'a HashMap<usize, String>, skip: Optio
         .collect()
 }
 
+/// Size in characters `(width, height)` of the canvas [`paint`] makes at
+/// `scale`, without painting it.
+pub fn canvas_size(game: &Game, theme: &Theme, scale: usize) -> (usize, usize) {
+    let layout = game.layout();
+    let s = scale.max(4) & !1;
+    let (fs, ft, fb) = theme.frame_size;
+    (fs + 1 + layout.width() as usize * s + fs, (ft + 1 + layout.height() as usize * s + fb) / 2)
+}
+
 pub fn paint(game: &Game, theme: &Theme, options: &PaintOptions) -> Canvas {
     let image = paint_image(game, theme, options, None);
     let labels = labels_for(&image, &options.labels, None);
@@ -627,7 +636,7 @@ mod tests {
 
     #[test]
     fn every_puzzle_paints_in_every_theme() {
-        for (_, source) in crate::BUILT_IN {
+        for (_, source) in crate::puzzles::BUILT_IN {
             let (puzzle, _) = dd_engine::file::parse(source).unwrap().build().unwrap();
             let game = Game::new(puzzle);
             let labels: HashMap<usize, String> = (0..game.block_count()).map(|b| (b, format!("{b}"))).collect();
@@ -651,6 +660,17 @@ mod tests {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn canvas_size_matches_paint() {
+        let game = game("A..\n...", ('A', 2, 1));
+        for theme in &THEMES {
+            for scale in [4, 6, 8] {
+                let canvas = paint(&game, theme, &PaintOptions { scale, ..Default::default() });
+                assert_eq!(canvas_size(&game, theme, scale), (canvas.width, canvas.height));
             }
         }
     }

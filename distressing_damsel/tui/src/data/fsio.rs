@@ -18,7 +18,7 @@ pub fn write_atomic(path: &Path, contents: &str) -> io::Result<()> {
 }
 
 /// Reads a file, treating a missing one as `None`.
-pub fn read_optional(path: &Path) -> io::Result<Option<String>> {
+pub fn read_if_exists(path: &Path) -> io::Result<Option<String>> {
     match std::fs::read_to_string(path) {
         Ok(text) => Ok(Some(text)),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
@@ -35,10 +35,10 @@ mod tests {
     fn writes_create_folders_and_replace_whole_files() {
         let tmp = TempDir::new();
         let path = tmp.0.join("a/b/file.toml");
-        assert_eq!(read_optional(&path).unwrap(), None);
+        assert_eq!(read_if_exists(&path).unwrap(), None);
         write_atomic(&path, "first").unwrap();
         write_atomic(&path, "second").unwrap();
-        assert_eq!(read_optional(&path).unwrap().as_deref(), Some("second"));
+        assert_eq!(read_if_exists(&path).unwrap().as_deref(), Some("second"));
         // No temporary files left behind.
         let names: Vec<_> = std::fs::read_dir(tmp.0.join("a/b")).unwrap().map(|e| e.unwrap().file_name()).collect();
         assert_eq!(names, ["file.toml"]);

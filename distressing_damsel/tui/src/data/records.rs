@@ -125,7 +125,7 @@ impl Records {
     pub fn load(data_dir: &Path) -> Result<Records, String> {
         let path = data_dir.join("records.toml");
         let shown = path.display();
-        let Some(text) = fsio::read_optional(&path).map_err(|e| format!("{shown}: {e}"))? else {
+        let Some(text) = fsio::read_if_exists(&path).map_err(|e| format!("{shown}: {e}"))? else {
             return Ok(Records::default());
         };
         let file: RecordsFile = toml::from_str(&text).map_err(|e| format!("{shown}: {}", e.message()))?;

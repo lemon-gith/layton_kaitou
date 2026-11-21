@@ -92,7 +92,7 @@ impl Settings {
     /// Reads the settings file, or the defaults if there is none.
     pub fn load(home: &Home) -> Result<Settings, String> {
         let path = home.settings_file();
-        match fsio::read_optional(&path) {
+        match fsio::read_if_exists(&path) {
             Ok(Some(text)) => Settings::parse(&text).map_err(|e| format!("{}: {e}", path.display())),
             Ok(None) => Ok(Settings::default()),
             Err(e) => Err(format!("{}: {e}", path.display())),
@@ -133,8 +133,6 @@ impl Settings {
         toml::to_string(self).expect("settings serialise")
     }
 
-    // Used by the interactive interface.
-    #[allow(dead_code)]
     pub fn theme(&self) -> &'static look::Theme {
         look::theme::by_name(&self.theme).expect("checked on load")
     }
