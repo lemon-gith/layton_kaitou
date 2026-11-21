@@ -44,12 +44,13 @@ fn klotski_classes_and_symmetry() {
     assert_eq!(p.layout.classes().len(), 4);
     assert_eq!(p.layout.n_blocks(), 10);
     let transforms: Vec<_> = p.layout.symmetries().iter().map(|s| s.transform).collect();
-    assert_eq!(transforms, [Transform::FlipH]);
+    // Landscape, exit on the right: mirrored top to bottom.
+    assert_eq!(transforms, [Transform::FlipV]);
 }
 
 #[test]
 fn off_centre_goal_breaks_symmetry() {
-    let source = KLOTSKI.replace("at = [1, 3]", "at = [0, 3]");
+    let source = KLOTSKI.replace("at = [3, 1]", "at = [3, 0]");
     assert!(puzzle(&source).layout.symmetries().is_empty());
 }
 
@@ -343,7 +344,7 @@ fn loading_a_position_keeps_block_counts() {
 #[test]
 fn exits_are_inferred_given_and_checked() {
     use dd_engine::Dir;
-    assert_eq!(puzzle(KLOTSKI).exit, Some(Dir::Down));
+    assert_eq!(puzzle(KLOTSKI).exit, Some(Dir::Right));
     assert_eq!(puzzle(GRIDLOCK).exit, Some(Dir::Right));
     // Top-right corner: down and left are not touched; right wins over up.
     assert_eq!(puzzle(ODD_SHAPES).exit, Some(Dir::Right));

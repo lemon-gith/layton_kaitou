@@ -256,12 +256,12 @@ mod tests {
         let mut s = klotski(&tmp.0);
         assert_eq!(s.context(), Context::Game);
         act(&mut s, &[Action::Select]);
-        // The cursor starts on the key block, B.
-        assert_eq!(s.cursor().map(|b| label(&s, b)), Some('B'));
+        // The cursor starts on the key block, D.
+        assert_eq!(s.cursor().map(|b| label(&s, b)), Some('D'));
         act(&mut s, &[Action::Jump]);
         assert_eq!(s.context(), Context::Jump);
         act(&mut s, &[Action::Back]);
-        assert_eq!(s.cursor().map(|b| label(&s, b)), Some('B'), "Esc from jump returns to where the cursor was");
+        assert_eq!(s.cursor().map(|b| label(&s, b)), Some('D'), "Esc from jump returns to where the cursor was");
         act(&mut s, &[Action::Back]);
         assert_eq!(s.context(), Context::Game);
 
@@ -278,12 +278,13 @@ mod tests {
     fn arrows_move_the_cursor_and_shift_slides() {
         let tmp = TempDir::new();
         let mut s = klotski(&tmp.0);
-        act(&mut s, &[Action::Select, Action::Move(Dir::Down), Action::Move(Dir::Down)]);
-        assert_eq!(s.cursor().map(|b| label(&s, b)), Some('G'));
-        // G cannot go up (E is there); it can go down twice: one move.
-        act(&mut s, &[Action::Slide(Dir::Up), Action::Slide(Dir::Down)]);
+        // AABBC / DDEF. / DDEG. / HHIIJ: from D, right twice reaches F.
+        act(&mut s, &[Action::Select, Action::Move(Dir::Right), Action::Move(Dir::Right)]);
+        assert_eq!(s.cursor().map(|b| label(&s, b)), Some('F'));
+        // F cannot go left (E is there); it can go right into the gap.
+        act(&mut s, &[Action::Slide(Dir::Left), Action::Slide(Dir::Right)]);
         assert_eq!(s.game().move_count(), 1);
-        act(&mut s, &[Action::Slide(Dir::Right)]);
+        act(&mut s, &[Action::Slide(Dir::Down)]);
         assert_eq!(s.game().move_count(), 1, "still the same block, still one move");
     }
 
@@ -296,7 +297,7 @@ mod tests {
         let g = s.cursor().unwrap();
         let start = s.game().anchor(g).unwrap();
         assert_ne!(s.reach(), 0);
-        act(&mut s, &[Action::Slide(Dir::Down), Action::Slide(Dir::Right)]);
+        act(&mut s, &[Action::Slide(Dir::Right), Action::Slide(Dir::Up)]);
         assert_eq!(s.game().move_count(), 1);
         act(&mut s, &[Action::Undo]);
         assert_eq!(s.game().move_count(), 1, "undo waits until the block is dropped");
@@ -305,7 +306,7 @@ mod tests {
         assert_eq!(s.game().anchor(g), Some(start));
         assert_eq!(s.game().move_count(), 0, "putting it back costs nothing");
 
-        act(&mut s, &[Action::Grab, Action::Slide(Dir::Down), Action::Drop]);
+        act(&mut s, &[Action::Grab, Action::Slide(Dir::Right), Action::Drop]);
         assert_eq!(s.context(), Context::Select);
         assert_eq!(s.game().move_count(), 1);
         assert_eq!(s.reach(), 0);
@@ -340,14 +341,14 @@ mod tests {
         let mut s = klotski(&tmp.0);
         let now = Instant::now();
         act(&mut s, &[Action::Jump, Action::Label('G')]);
-        s.act(Action::Slide(Dir::Down), now, true);
+        s.act(Action::Slide(Dir::Right), now, true);
         assert!(s.animating());
         s.advance(now + Duration::from_millis(10));
         assert!(s.animating());
         s.advance(now + Duration::from_millis(slide_millis(1)));
         assert!(!s.animating());
-        // G is on the bottom row now; the cell to its right is free.
-        s.act(Action::Slide(Dir::Right), now, true);
+        // G is at the right edge now; the cell above it is free.
+        s.act(Action::Slide(Dir::Up), now, true);
         assert!(s.animating());
         s.act(Action::Move(Dir::Up), now, true);
         assert!(!s.animating(), "a key finishes the slide");

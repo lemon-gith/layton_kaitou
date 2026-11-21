@@ -21,13 +21,14 @@ fn block(game: &Game, label: char) -> usize {
 /// A few moves of Klotski, made the way a player would: steps that
 /// coalesce, a detour that cancels out, then more moves.
 fn played() -> Game {
+    // AABBC / DDEF. / DDEG. / HHIIJ
     let mut game = Game::new(puzzle(KLOTSKI));
-    let (g, j, f) = (block(&game, 'G'), block(&game, 'J'), block(&game, 'F'));
-    game.step(g, Dir::Down).unwrap();
-    game.step(j, Dir::Left).unwrap();
-    game.step(j, Dir::Right).unwrap(); // back where it was: no move
-    game.step(j, Dir::Left).unwrap();
-    game.step(f, Dir::Down).unwrap();
+    let (f, g, e) = (block(&game, 'F'), block(&game, 'G'), block(&game, 'E'));
+    game.step(f, Dir::Right).unwrap();
+    game.step(g, Dir::Right).unwrap();
+    game.step(g, Dir::Left).unwrap(); // back where it was: no move
+    game.step(g, Dir::Right).unwrap();
+    game.step(e, Dir::Right).unwrap();
     game
 }
 
@@ -51,7 +52,7 @@ fn records_round_trip_through_toml() {
     }
     let game = played();
     let save = Save { moves: game.records() };
-    assert_eq!(save.moves[0], MoveRecord { block: 'G', from: [1, 3], to: [1, 4] });
+    assert_eq!(save.moves[0], MoveRecord { block: 'F', from: [3, 1], to: [4, 1] });
     let text = toml::to_string(&save).unwrap();
     let back: Save = toml::from_str(&text).unwrap();
     assert_eq!(back, save);
@@ -86,7 +87,7 @@ fn bad_histories_are_rejected() {
     let anchor = p.blocks[b].start;
     check(&[Drag { block: b, from: anchor, to: anchor + 4 }], HistoryError::Illegal { index: 0 });
 
-    let off = [MoveRecord { block: 'G', from: [1, 3], to: [9, 9] }];
+    let off = [MoveRecord { block: 'G', from: [3, 2], to: [9, 9] }];
     assert_eq!(Game::from_records(p.clone(), &off).unwrap_err(), HistoryError::OffBoard { index: 0 });
     let unknown = [MoveRecord { block: 'Z', from: [0, 0], to: [0, 1] }];
     assert_eq!(Game::from_records(p.clone(), &unknown).unwrap_err(), HistoryError::UnknownBlock('Z'));

@@ -94,16 +94,15 @@ mod tests {
     fn klotski_moves_between_neighbours() {
         let spec = dd_engine::file::parse(include_str!("../../../puzzles/klotski.toml")).unwrap();
         let g = Game::new(spec.build().unwrap().0);
-        // ABBC / ABBC / DEEF / DGHF / I..J
+        // AABBC / DDEF. / DDEG. / HHIIJ
         assert_eq!(go(&g, 'A', Dir::Right), Some('B'));
         assert_eq!(go(&g, 'B', Dir::Right), Some('C'));
         assert_eq!(go(&g, 'C', Dir::Right), None);
-        assert_eq!(go(&g, 'B', Dir::Down), Some('E'));
-        assert_eq!(go(&g, 'E', Dir::Down), Some('G'), "a tie goes to the lower id");
-        assert_eq!(go(&g, 'G', Dir::Down), Some('I'), "nothing in G's column: nearest ahead");
-        assert_eq!(go(&g, 'H', Dir::Down), Some('J'));
-        assert_eq!(go(&g, 'I', Dir::Up), Some('D'));
-        assert_eq!(go(&g, 'D', Dir::Right), Some('E'), "E is nearer than G within D's rows");
+        assert_eq!(go(&g, 'B', Dir::Down), Some('E'), "E and F tie; the lower label wins");
+        assert_eq!(go(&g, 'E', Dir::Right), Some('F'));
+        assert_eq!(go(&g, 'G', Dir::Right), Some('J'), "nothing in G's row: nearest ahead");
+        assert_eq!(go(&g, 'D', Dir::Right), Some('E'));
+        assert_eq!(go(&g, 'J', Dir::Up), Some('C'), "empty cells in between are skipped");
         assert_eq!(go(&g, 'A', Dir::Up), None);
     }
 

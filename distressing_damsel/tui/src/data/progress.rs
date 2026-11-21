@@ -189,10 +189,10 @@ mod tests {
         let (_, puzzle, code) = klotski();
         let mut progress = Progress::new(puzzle.clone());
         let g = block(&progress.game, 'G');
-        progress.game.step(g, Dir::Down).unwrap();
+        progress.game.step(g, Dir::Right).unwrap();
         let first = progress.game.history().to_vec();
-        let j = block(&progress.game, 'J');
-        progress.game.step(j, Dir::Left).unwrap();
+        let f = block(&progress.game, 'F');
+        progress.game.step(f, Dir::Right).unwrap();
         progress.counters = Counters { hints: 2, solution_viewed: false };
         progress.checkpoints.push(Checkpoint { number: 1, history: first.clone(), counters: Counters::default() });
         progress.checkpoints.push(Checkpoint {
@@ -222,12 +222,13 @@ mod tests {
         let path = progress_file(&tmp.0, &code);
         let mut progress = Progress::new(puzzle.clone());
         let g = block(&progress.game, 'G');
-        progress.game.step(g, Dir::Down).unwrap();
+        progress.game.step(g, Dir::Right).unwrap();
         save(&tmp.0, &code, &progress).unwrap();
         let good = std::fs::read_to_string(&path).unwrap();
 
         // An illegal move.
-        std::fs::write(&path, good.replace("to = [1, 4]", "to = [1, 0]")).unwrap();
+        // G onto C's cell.
+        std::fs::write(&path, good.replace("to = [4, 2]", "to = [4, 0]")).unwrap();
         assert!(load(&tmp.0, &code, &puzzle).unwrap_err().contains("not possible"));
         assert!(path.exists());
 
