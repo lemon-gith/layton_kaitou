@@ -67,6 +67,10 @@ pub struct PaintOptions {
     pub labels: HashMap<usize, String>,
     /// Block to outline as selected.
     pub selected: Option<usize>,
+    /// The selected block is held: its outline is drawn twice as thick.
+    pub grabbed: bool,
+    /// Cells to tint faintly, such as where a held block can go.
+    pub reach: Mask,
     /// Outline where the key block has to go.
     pub show_goal: bool,
     /// Outline empty cells.
@@ -81,6 +85,8 @@ impl Default for PaintOptions {
             scale: 6,
             labels: HashMap::new(),
             selected: None,
+            grabbed: false,
+            reach: 0,
             show_goal: false,
             grid: true,
             grain: 1.0,
@@ -280,6 +286,12 @@ fn paint_image(game: &Game, theme: &Theme, options: &PaintOptions, hidden: Optio
                     if options.grid && grid_line {
                         c = c.shade(if theme.dark { theme.floor_grid } else { -theme.floor_grid });
                     }
+                    if options.reach != 0 && bx >= 0 && by >= 0 && (bx as usize) < w * s && (by as usize) < h * s {
+                        let cell = layout.cell((bx as usize / s) as u8, (by as usize / s) as u8);
+                        if options.reach & bit(cell) != 0 {
+                            c = c.mix(theme.accent, 0.16);
+                        }
+                    }
                     if options.show_goal && goal_face(xi, yi) {
                         let edge = [(0, -1), (0, 1), (-1, 0), (1, 0)]
                             .iter()
@@ -343,13 +355,14 @@ fn paint_image(game: &Game, theme: &Theme, options: &PaintOptions, hidden: Optio
         }
     }
 
-    // Selection: a ring just outside the block.
+    // Selection: a ring just outside the block, twice as thick when held.
     let mut ring = HashSet::new();
     if let Some(sel) = options.selected.filter(|&b| Some(b) != hidden) {
         let face = |x: isize, y: isize| at(x, y) == Owner::Face(sel);
+        let r: isize = if options.grabbed { 2 } else { 1 };
         for y in 0..ph as isize {
             for x in 0..pw as isize {
-                if !face(x, y) && (-1..=1).any(|dy| (-1..=1).any(|dx| face(x + dx, y + dy))) {
+                if !face(x, y) && (-r..=r).any(|dy| (-r..=r).any(|dx| face(x + dx, y + dy))) {
                     ring.insert(y as usize * pw + x as usize);
                 }
             }
@@ -647,6 +660,8 @@ mod tests {
                             scale,
                             labels: labels.clone(),
                             selected: Some(0),
+                            grabbed: grid,
+                            reach: if show_goal { !0 } else { 0 },
                             show_goal,
                             grid,
                             grain: 1.5,
@@ -673,6 +688,18 @@ mod tests {
                 assert_eq!(canvas_size(&game, theme, scale), (canvas.width, canvas.height));
             }
         }
+    }
+
+    #[test]
+    fn grabbed_blocks_and_reach_are_marked() {
+        let game = game("A..\n...", ('A', 2, 1));
+        let theme = &THEMES[0];
+        let selected = PaintOptions { selected: Some(0), ..Default::default() };
+        let held = PaintOptions { grabbed: true, ..selected.clone() };
+        let accents = |c: &Canvas| c.glyphs.iter().filter(|g| g.fg == theme.accent || g.bg == theme.accent).count();
+        assert!(accents(&paint(&game, theme, &held)) > accents(&paint(&game, theme, &selected)));
+        let reach = PaintOptions { reach: bit(1) | bit(2), ..Default::default() };
+        assert_ne!(paint(&game, theme, &reach), paint(&game, theme, &PaintOptions::default()));
     }
 
     #[test]
