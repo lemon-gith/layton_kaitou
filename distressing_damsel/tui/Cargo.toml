@@ -1,0 +1,16 @@
+[package]
+name = "dd_tui"
+description = "Terminal front end for the sliding-block engine and solver"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "dd"
+path = "src/main.rs"
+
+[dependencies]
+dd_engine = { path = "../engine" }
+dd_solver = { path = "../solver" }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"

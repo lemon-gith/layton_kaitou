@@ -1,6 +1,12 @@
-[package]
-name = "distressing_damsel"
+[workspace]
+members = ["engine", "solver", "tui"]
+resolver = "2"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 
-[dependencies]
+[profile.release]
+debug = false
+lto = "thin"

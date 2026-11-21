@@ -1,0 +1,11 @@
+name = "First Steps"
+description = "A small warm-up: get the square into the far corner."
+grid = """
+AAB.
+AAC.
+DD..
+"""
+
+[goal]
+block = "A"
+at = [2, 1]

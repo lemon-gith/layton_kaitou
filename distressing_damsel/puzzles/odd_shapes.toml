@@ -1,0 +1,12 @@
+name = "Odd Shapes"
+description = "Irregular pieces. Move the corner piece A across to the top right."
+grid = """
+AABE.
+ACBB.
+CC.DD
+F.GD.
+"""
+
+[goal]
+block = "A"
+at = [3, 0]
