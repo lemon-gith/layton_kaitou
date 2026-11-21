@@ -6,6 +6,9 @@ mod data;
 mod look;
 mod render;
 mod settings;
+// The interactive interface is assembled over the next commits.
+#[allow(dead_code)]
+mod ui;
 
 use std::fmt::Write as _;
 use std::io::{IsTerminal as _, Write as _};
