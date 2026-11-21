@@ -2,6 +2,8 @@
 
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 use crate::geometry::{bit, Cell, Dir, Mask};
 use crate::layout::Layout;
 use crate::position::{Move, Position};
@@ -36,6 +38,56 @@ impl fmt::Display for MoveError {
 }
 
 impl std::error::Error for MoveError {}
+
+/// A drag in a form that can be saved: the block by its puzzle label and
+/// cells as `[column, row]`, so a save does not depend on internal block
+/// numbers or board encoding.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MoveRecord {
+    pub block: char,
+    pub from: [u8; 2],
+    pub to: [u8; 2],
+}
+
+/// Why a saved history could not be replayed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HistoryError {
+    /// No block has this label.
+    UnknownBlock(char),
+    /// A cell outside the board.
+    OffBoard { index: usize },
+    /// The move does not start where its block is.
+    WrongStart { index: usize },
+    /// The block cannot be dragged there from where it is.
+    Illegal { index: usize },
+    /// The move leaves the block where it was.
+    Empty { index: usize },
+    /// The same block moves twice in a row; those steps are one move and
+    /// must be saved as one.
+    Uncoalesced { index: usize },
+    /// The history ends somewhere other than where it was meant to.
+    DifferentPosition,
+}
+
+impl fmt::Display for HistoryError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            HistoryError::UnknownBlock(l) => write!(f, "no block is labelled {l}"),
+            HistoryError::OffBoard { index } => write!(f, "move {} uses a cell off the board", index + 1),
+            HistoryError::WrongStart { index } => {
+                write!(f, "move {} does not start where its block is", index + 1)
+            }
+            HistoryError::Illegal { index } => write!(f, "move {} is not possible", index + 1),
+            HistoryError::Empty { index } => write!(f, "move {} does not move its block", index + 1),
+            HistoryError::Uncoalesced { index } => {
+                write!(f, "moves {} and {} move the same block and should be one", index, index + 1)
+            }
+            HistoryError::DifferentPosition => write!(f, "the moves do not lead to this position"),
+        }
+    }
+}
+
+impl std::error::Error for HistoryError {}
 
 /// A puzzle being played.
 ///
@@ -214,6 +266,116 @@ impl Game {
         self.position = *position;
         self.history.clear();
         self.undone.clear();
+        Ok(())
+    }
+}
+
+/// Saving, restoring and comparing histories.
+impl Game {
+    /// The game reached by playing `history` from the start, checking every
+    /// move. The history must already be coalesced (no block moves twice in
+    /// a row), as [`Game::history`] always is.
+    pub fn from_history(puzzle: Puzzle, history: &[Drag]) -> Result<Game, HistoryError> {
+        let mut game = Game::new(puzzle);
+        for (index, drag) in history.iter().enumerate() {
+            let from = game.anchor(drag.block).ok_or(HistoryError::WrongStart { index })?;
+            if from != drag.from {
+                return Err(HistoryError::WrongStart { index });
+            }
+            if drag.from == drag.to {
+                return Err(HistoryError::Empty { index });
+            }
+            if index > 0 && history[index - 1].block == drag.block {
+                return Err(HistoryError::Uncoalesced { index });
+            }
+            if (drag.to as usize) >= game.layout().n_cells() || game.reachable(drag.block) & bit(drag.to) == 0 {
+                return Err(HistoryError::Illegal { index });
+            }
+            game.relocate(drag.block, drag.to);
+            game.history.push(*drag);
+        }
+        Ok(game)
+    }
+
+    /// The history in savable form.
+    pub fn records(&self) -> Vec<MoveRecord> {
+        let layout = self.layout();
+        let xy = |cell: Cell| {
+            let (x, y) = layout.xy(cell);
+            [x, y]
+        };
+        self.history
+            .iter()
+            .map(|d| MoveRecord { block: self.puzzle.blocks[d.block].label, from: xy(d.from), to: xy(d.to) })
+            .collect()
+    }
+
+    /// Turns saved records back into drags for this puzzle, without playing
+    /// them; see [`Game::from_records`].
+    pub fn drags_from_records(puzzle: &Puzzle, records: &[MoveRecord]) -> Result<Vec<Drag>, HistoryError> {
+        let layout = &puzzle.layout;
+        let cell = |[x, y]: [u8; 2], index: usize| {
+            if x < layout.width() && y < layout.height() {
+                Ok(layout.cell(x, y))
+            } else {
+                Err(HistoryError::OffBoard { index })
+            }
+        };
+        records
+            .iter()
+            .enumerate()
+            .map(|(index, r)| {
+                let block = puzzle
+                    .blocks
+                    .iter()
+                    .position(|b| b.label == r.block)
+                    .ok_or(HistoryError::UnknownBlock(r.block))?;
+                Ok(Drag { block, from: cell(r.from, index)?, to: cell(r.to, index)? })
+            })
+            .collect()
+    }
+
+    /// The game reached by playing saved records from the start.
+    pub fn from_records(puzzle: Puzzle, records: &[MoveRecord]) -> Result<Game, HistoryError> {
+        let drags = Game::drags_from_records(&puzzle, records)?;
+        Game::from_history(puzzle, &drags)
+    }
+
+    /// Code of the current position with blocks of a class interchangeable:
+    /// swapping two identical-looking blocks gives the same code. Mirror
+    /// images give different codes.
+    pub fn position_code(&self) -> Vec<u8> {
+        self.layout().encode(&self.position)
+    }
+
+    /// Codes of every position along the history: the start, then the
+    /// position after each move. From the same start, the block that moves
+    /// is always the one whose cell is vacated, so two games have the same
+    /// route exactly when they have the same history.
+    pub fn route(&self) -> Vec<Vec<u8>> {
+        let layout = self.layout();
+        let mut position = self.puzzle.start;
+        let mut codes = Vec::with_capacity(self.history.len() + 1);
+        codes.push(layout.encode(&position));
+        for drag in &self.history {
+            let class = self.puzzle.blocks[drag.block].class;
+            position.remove(drag.from);
+            position.place(drag.to, class);
+            codes.push(layout.encode(&position));
+        }
+        codes
+    }
+
+    /// Replaces the history with another route to the same position, such as
+    /// a checkpoint's. Block labels follow the new route, so two identical
+    /// blocks may trade places on the board. Fails, changing nothing, if the
+    /// route is invalid or ends in a different position.
+    pub fn set_history(&mut self, history: &[Drag]) -> Result<(), HistoryError> {
+        let replayed = Game::from_history(self.puzzle.clone(), history)?;
+        if replayed.position != self.position {
+            return Err(HistoryError::DifferentPosition);
+        }
+        *self = replayed;
         Ok(())
     }
 }

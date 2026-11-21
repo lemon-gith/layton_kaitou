@@ -20,7 +20,7 @@ pub mod layout;
 pub mod position;
 pub mod spec;
 
-pub use game::{BlockId, Drag, Game, MoveError};
+pub use game::{BlockId, Drag, Game, HistoryError, MoveError, MoveRecord};
 pub use geometry::{bit, cells, Axis, Cell, Dir, Mask, Transform, MAX_CELLS, NO_CELL};
 pub use layout::{Class, ClassDef, ClassId, Goal, Layout, LayoutError, Shape, Symmetry};
 pub use position::{Metric, Move, Position};
