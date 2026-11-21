@@ -362,7 +362,8 @@ fn paint_image(game: &Game, theme: &Theme, options: &PaintOptions, hidden: Optio
         let r: isize = if options.grabbed { 2 } else { 1 };
         for y in 0..ph as isize {
             for x in 0..pw as isize {
-                if !face(x, y) && (-r..=r).any(|dy| (-r..=r).any(|dx| face(x + dx, y + dy))) {
+                let on_frame = at(x, y) == Owner::Frame;
+                if !face(x, y) && !on_frame && (-r..=r).any(|dy| (-r..=r).any(|dx| face(x + dx, y + dy))) {
                     ring.insert(y as usize * pw + x as usize);
                 }
             }
