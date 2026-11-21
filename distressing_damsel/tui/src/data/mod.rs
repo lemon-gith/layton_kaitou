@@ -10,5 +10,7 @@ pub mod home;
 // Used by the play screen.
 #[allow(dead_code)]
 pub mod progress;
+#[allow(dead_code)]
+pub mod records;
 
 pub use home::Home;
