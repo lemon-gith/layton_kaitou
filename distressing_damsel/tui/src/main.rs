@@ -2,9 +2,13 @@
 //!
 //! For now this is the headless half: load a puzzle, inspect it, solve it.
 
+// The interactive app is wired into main in the next commit.
+#[allow(dead_code)]
+mod app;
 mod data;
 mod look;
 mod render;
+mod puzzles;
 mod settings;
 // The interactive interface is assembled over the next commits.
 #[allow(dead_code)]
@@ -18,13 +22,6 @@ use std::time::Instant;
 use dd_engine::{file, Game, Metric, Puzzle, PuzzleSpec, Warning};
 use dd_solver::{Explore, Options, Outcome, Solution, Solver};
 
-const BUILT_IN: &[(&str, &str)] = &[
-    ("first_steps", include_str!("../../puzzles/first_steps.toml")),
-    ("klotski", include_str!("../../puzzles/klotski.toml")),
-    ("gridlock", include_str!("../../puzzles/gridlock.toml")),
-    ("odd_shapes", include_str!("../../puzzles/odd_shapes.toml")),
-    ("trading_places", include_str!("../../puzzles/trading_places.toml")),
-];
 
 const USAGE: &str = "\
 usage: dd <command>
@@ -93,7 +90,7 @@ fn run(args: &[String], out: &mut String) -> Result<(), String> {
     let puzzle_arg = || args.get(1).ok_or_else(|| "which puzzle?".to_string());
     match args.first().map(String::as_str) {
         Some("list") => {
-            for (id, source) in BUILT_IN {
+            for (id, source) in puzzles::BUILT_IN {
                 let spec = file::parse(source).map_err(|e| format!("{id}: {e}"))?;
                 say!(out, "{id:<16} {}", spec.description);
             }
@@ -120,7 +117,7 @@ fn run(args: &[String], out: &mut String) -> Result<(), String> {
 }
 
 fn load(arg: &str) -> Result<PuzzleSpec, String> {
-    if let Some((_, source)) = BUILT_IN.iter().find(|(id, _)| *id == arg) {
+    if let Some((_, source)) = puzzles::BUILT_IN.iter().find(|(id, _)| *id == arg) {
         return file::parse(source).map_err(|e| e.to_string());
     }
     if arg.starts_with("dd1-") {

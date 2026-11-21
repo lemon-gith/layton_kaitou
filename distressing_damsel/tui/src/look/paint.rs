@@ -636,7 +636,7 @@ mod tests {
 
     #[test]
     fn every_puzzle_paints_in_every_theme() {
-        for (_, source) in crate::BUILT_IN {
+        for (_, source) in crate::puzzles::BUILT_IN {
             let (puzzle, _) = dd_engine::file::parse(source).unwrap().build().unwrap();
             let game = Game::new(puzzle);
             let labels: HashMap<usize, String> = (0..game.block_count()).map(|b| (b, format!("{b}"))).collect();

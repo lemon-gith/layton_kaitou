@@ -133,8 +133,6 @@ impl Settings {
         toml::to_string(self).expect("settings serialise")
     }
 
-    // Used by the interactive interface.
-    #[allow(dead_code)]
     pub fn theme(&self) -> &'static look::Theme {
         look::theme::by_name(&self.theme).expect("checked on load")
     }
