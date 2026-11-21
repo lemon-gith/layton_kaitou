@@ -2,6 +2,7 @@
 //!
 //! For now this is the headless half: load a puzzle, inspect it, solve it.
 
+mod data;
 mod look;
 mod render;
 mod settings;
@@ -277,25 +278,22 @@ fn parse<T: std::str::FromStr>(text: &str) -> Result<T, String> {
 }
 
 fn show_settings(action: Option<&str>, out: &mut String) -> Result<(), String> {
-    let path = settings::Settings::path();
-    let shown = path.as_ref().map_or("(no home directory)".into(), |p| p.display().to_string());
+    let home = data::Home::from_env();
+    let path = home.settings_file();
+    let shown = path.display();
     match action {
         None => {
-            let current = settings::Settings::load()?;
-            let exists = path.as_ref().is_some_and(|p| p.exists());
-            say!(out, "# {shown}{}", if exists { "" } else { " (not created; these are the defaults)" });
+            let current = settings::Settings::load(&home)?;
+            say!(out, "# {shown}{}", if path.exists() { "" } else { " (not created; these are the defaults)" });
+            say!(out, "# puzzles, progress and records: {}", current.data_dir(&home).display());
             put!(out, "{}", current.to_toml());
             Ok(())
         }
         Some("init") => {
-            let path = path.ok_or("no home directory to put settings in")?;
             if path.exists() {
                 return Err(format!("{shown} already exists"));
             }
-            if let Some(dir) = path.parent() {
-                std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-            }
-            std::fs::write(&path, settings::Settings::default().to_toml()).map_err(|e| format!("{shown}: {e}"))?;
+            settings::Settings::default().save(&home)?;
             say!(out, "wrote {shown}");
             Ok(())
         }
@@ -304,7 +302,7 @@ fn show_settings(action: Option<&str>, out: &mut String) -> Result<(), String> {
 }
 
 fn preview(spec: &PuzzleSpec, flags: &[String], out: &mut String) -> Result<(), String> {
-    let settings = settings::Settings::load()?;
+    let settings = settings::Settings::load(&data::Home::from_env())?;
     let mut themes: Vec<&look::Theme> = look::THEMES.iter().collect();
     let mut options = settings.paint_options();
     let mut labels = settings.labels == settings::Labels::Always;
