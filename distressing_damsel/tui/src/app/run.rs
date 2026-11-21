@@ -12,7 +12,7 @@ use ratatui::Terminal;
 use super::keys::Key;
 use super::{App, Flow};
 
-/// Frame time while something is animating.
+/// Frame time while something is animating (60 fps)
 const FRAME: Duration = Duration::from_millis(16);
 
 /// Translates a terminal key event. Key releases and unbound keys give
