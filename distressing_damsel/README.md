@@ -78,19 +78,29 @@ left), and a target away from every edge has no exit.
 blocks in a carved box). `--play` animates the shortest solution and the key
 block's exit; `dd help` lists the other options.
 
-Settings live in `~/.config/dd/settings.toml` (or `$XDG_CONFIG_HOME/dd/`,
-or wherever `$DD_CONFIG` points). `dd settings` shows them and
-`dd settings init` writes the defaults:
+Everything `dd` keeps lives in `.data/` here (git-ignored), or wherever
+`$DD_HOME` points. Settings are in `.data/settings.toml`; `dd settings`
+shows them and `dd settings init` writes the defaults:
 
 ```toml
 theme = "escape-dark"
-grain = 1             # texture, 0 to 3, for textured themes; 2 is as designed
-labels = "on-demand"  # or "always", "off"
-show_goal = false     # outline where the key block has to go
-grid = true           # outline empty cells
-scale = 6             # characters per cell across
-animations = true     # slide blocks and fade the key block out when solved
+grain = 1                    # texture, 0 to 3, for textured themes; 2 is as designed
+labels = "on-demand"         # or "always", "off"
+show_goal = false            # outline where the key block has to go
+grid = true                  # outline empty cells
+scale = 6                    # characters per cell across
+animations = true            # slide blocks and fade the key block out when solved
+confirm_hints = true         # ask before giving a hint
+show_solver_length = false   # show the shortest solution's length while playing
+mark_reachable = false       # mark where a grabbed block can go
+best = "overall"             # or "no-hints-first"
+# data_dir = "../somewhere"  # where puzzles, progress and records live
 ```
+
+`dd settings move-data <folder>` copies your puzzles, progress and records
+to another folder and points `data_dir` at it. It never deletes anything:
+files already in the new folder are left as they are, and the old copy
+stays for you to remove.
 
 ## Counting moves
 

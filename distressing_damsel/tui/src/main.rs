@@ -2,6 +2,7 @@
 //!
 //! For now this is the headless half: load a puzzle, inspect it, solve it.
 
+mod data;
 mod look;
 mod render;
 mod settings;
@@ -34,6 +35,8 @@ usage: dd <command>
 
   settings [init]          show your settings and where they live, or
                            write a settings file with the defaults
+  settings move-data <dir> copy puzzles, progress and records to <dir> and
+                           use it from now on (nothing is deleted)
 
 preview options (defaults come from your settings):
   --theme <name|all>  dark, light, escape-dark, escape-light, liberation,
@@ -104,7 +107,7 @@ fn run(args: &[String], out: &mut String) -> Result<(), String> {
             Ok(())
         }
         Some("preview") => preview(&load(puzzle_arg()?)?, &args[2..], out),
-        Some("settings") => show_settings(args.get(1).map(String::as_str), out),
+        Some("settings") => show_settings(&args[1..], out),
         Some("help" | "--help" | "-h") | None => {
             put!(out, "{USAGE}");
             Ok(())
@@ -276,27 +279,41 @@ fn parse<T: std::str::FromStr>(text: &str) -> Result<T, String> {
     text.parse().map_err(|_| format!("{text:?} is not a number"))
 }
 
-fn show_settings(action: Option<&str>, out: &mut String) -> Result<(), String> {
-    let path = settings::Settings::path();
-    let shown = path.as_ref().map_or("(no home directory)".into(), |p| p.display().to_string());
-    match action {
+fn show_settings(args: &[String], out: &mut String) -> Result<(), String> {
+    let home = data::Home::from_env();
+    let path = home.settings_file();
+    let shown = path.display();
+    match args.first().map(String::as_str) {
         None => {
-            let current = settings::Settings::load()?;
-            let exists = path.as_ref().is_some_and(|p| p.exists());
-            say!(out, "# {shown}{}", if exists { "" } else { " (not created; these are the defaults)" });
+            let current = settings::Settings::load(&home)?;
+            say!(out, "# {shown}{}", if path.exists() { "" } else { " (not created; these are the defaults)" });
+            say!(out, "# puzzles, progress and records: {}", current.data_dir(&home).display());
             put!(out, "{}", current.to_toml());
             Ok(())
         }
         Some("init") => {
-            let path = path.ok_or("no home directory to put settings in")?;
             if path.exists() {
                 return Err(format!("{shown} already exists"));
             }
-            if let Some(dir) = path.parent() {
-                std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-            }
-            std::fs::write(&path, settings::Settings::default().to_toml()).map_err(|e| format!("{shown}: {e}"))?;
+            settings::Settings::default().save(&home)?;
             say!(out, "wrote {shown}");
+            Ok(())
+        }
+        Some("move-data") => {
+            let target = args.get(1).ok_or("move-data needs a folder")?;
+            let target = std::path::absolute(target).map_err(|e| format!("{target}: {e}"))?;
+            let mut current = settings::Settings::load(&home)?;
+            let old = current.data_dir(&home);
+            let report = data::relocate::copy_data(&old, &target)?;
+            current.data_dir = (target != home.data_dir(None)).then_some(target.clone());
+            current.save(&home)?;
+            say!(out, "copied {} file(s) to {}", report.copied, target.display());
+            for skipped in &report.skipped {
+                say!(out, "skipped {} (already there; left as it was)", skipped.display());
+            }
+            if old != target {
+                say!(out, "the old copy is still in {}; remove it yourself once you're happy", old.display());
+            }
             Ok(())
         }
         Some(other) => Err(format!("unknown settings action {other:?}")),
@@ -304,7 +321,7 @@ fn show_settings(action: Option<&str>, out: &mut String) -> Result<(), String> {
 }
 
 fn preview(spec: &PuzzleSpec, flags: &[String], out: &mut String) -> Result<(), String> {
-    let settings = settings::Settings::load()?;
+    let settings = settings::Settings::load(&data::Home::from_env())?;
     let mut themes: Vec<&look::Theme> = look::THEMES.iter().collect();
     let mut options = settings.paint_options();
     let mut labels = settings.labels == settings::Labels::Always;

@@ -1,13 +1,11 @@
-//! User settings, kept in a TOML file.
-//!
-//! The file lives at `$DD_CONFIG` if that is set, otherwise
-//! `$XDG_CONFIG_HOME/dd/settings.toml`, otherwise
-//! `~/.config/dd/settings.toml`. Every key is optional.
+//! User settings, kept in `settings.toml` in the data folder (see
+//! [`Home`]). Every key is optional.
 
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::data::{fsio, Home};
 use crate::look;
 
 /// When block labels are drawn.
@@ -24,6 +22,18 @@ pub enum Labels {
 /// Texture multiplier for each grain level. Level 2 is each theme as
 /// designed; past 1.5 times the patterns start to break up.
 pub const GRAIN_LEVELS: [f32; 4] = [0.0, 0.5, 1.0, 1.5];
+
+/// Which best result the side panel shows.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BestShown {
+    /// The fewest moves, however they were reached.
+    #[default]
+    Overall,
+    /// The fewest moves without hints or viewing the solution, falling back
+    /// to the overall best when there is none.
+    NoHintsFirst,
+}
 
 pub fn grain_strength(level: u8) -> f32 {
     GRAIN_LEVELS[(level as usize).min(3)]
@@ -44,8 +54,19 @@ pub struct Settings {
     pub grid: bool,
     /// Characters per board cell across: even, 4 or more.
     pub scale: usize,
-    /// Play the key block's exit when a puzzle is solved.
+    /// Slide moved blocks and fade the key block out when solved.
     pub animations: bool,
+    /// Ask before giving a hint.
+    pub confirm_hints: bool,
+    /// Show the shortest solution's length in the side panel.
+    pub show_solver_length: bool,
+    /// Mark the cells a grabbed block can reach.
+    pub mark_reachable: bool,
+    pub best: BestShown,
+    /// Where puzzles, progress and records live. A relative path counts
+    /// from the data folder; unset means the data folder itself.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data_dir: Option<PathBuf>,
 }
 
 impl Default for Settings {
@@ -58,30 +79,34 @@ impl Default for Settings {
             grid: true,
             scale: 6,
             animations: true,
+            confirm_hints: true,
+            show_solver_length: false,
+            mark_reachable: false,
+            best: BestShown::Overall,
+            data_dir: None,
         }
     }
 }
 
 impl Settings {
-    pub fn path() -> Option<PathBuf> {
-        let var = |name| std::env::var_os(name).filter(|v| !v.is_empty()).map(PathBuf::from);
-        if let Some(path) = var("DD_CONFIG") {
-            return Some(path);
-        }
-        let base = var("XDG_CONFIG_HOME").or_else(|| var("HOME").map(|h| h.join(".config")))?;
-        Some(base.join("dd").join("settings.toml"))
-    }
-
     /// Reads the settings file, or the defaults if there is none.
-    pub fn load() -> Result<Settings, String> {
-        let Some(path) = Settings::path() else {
-            return Ok(Settings::default());
-        };
-        match std::fs::read_to_string(&path) {
-            Ok(text) => Settings::parse(&text).map_err(|e| format!("{}: {e}", path.display())),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Settings::default()),
+    pub fn load(home: &Home) -> Result<Settings, String> {
+        let path = home.settings_file();
+        match fsio::read_optional(&path) {
+            Ok(Some(text)) => Settings::parse(&text).map_err(|e| format!("{}: {e}", path.display())),
+            Ok(None) => Ok(Settings::default()),
             Err(e) => Err(format!("{}: {e}", path.display())),
         }
+    }
+
+    pub fn save(&self, home: &Home) -> Result<(), String> {
+        let path = home.settings_file();
+        fsio::write_atomic(&path, &self.to_toml()).map_err(|e| format!("{}: {e}", path.display()))
+    }
+
+    /// Where puzzles, progress and records live.
+    pub fn data_dir(&self, home: &Home) -> PathBuf {
+        home.data_dir(self.data_dir.as_deref())
     }
 
     pub fn parse(text: &str) -> Result<Settings, String> {
@@ -144,6 +169,11 @@ mod tests {
             grid: false,
             scale: 8,
             animations: false,
+            confirm_hints: false,
+            show_solver_length: true,
+            mark_reachable: true,
+            best: BestShown::NoHintsFirst,
+            data_dir: Some("../elsewhere".into()),
         };
         assert_eq!(Settings::parse(&custom.to_toml()).unwrap(), custom);
         assert!(Settings::parse("labels = \"on-demand\"").is_ok());
@@ -153,5 +183,19 @@ mod tests {
         assert!(Settings::parse("grain = 1.5").is_err());
         assert!(Settings::parse("scale = 5").is_err());
         assert!(Settings::parse("colour = 1").is_err());
+    }
+
+    #[test]
+    fn saves_and_loads_in_the_data_folder() {
+        let tmp = crate::data::home::testing::TempDir::new();
+        let home = Home::at(&tmp.0);
+        assert_eq!(Settings::load(&home).unwrap(), Settings::default());
+        let custom = Settings { theme: "light".into(), best: BestShown::NoHintsFirst, ..Settings::default() };
+        custom.save(&home).unwrap();
+        assert!(home.settings_file().exists());
+        assert_eq!(Settings::load(&home).unwrap(), custom);
+        assert_eq!(custom.data_dir(&home), home.root());
+        std::fs::write(home.settings_file(), "theme = 3").unwrap();
+        assert!(Settings::load(&home).unwrap_err().contains("settings.toml"));
     }
 }
