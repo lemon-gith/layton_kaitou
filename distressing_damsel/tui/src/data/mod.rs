@@ -12,5 +12,8 @@ pub mod home;
 pub mod progress;
 #[allow(dead_code)]
 pub mod records;
+#[allow(dead_code)]
+pub mod library;
+pub mod relocate;
 
 pub use home::Home;

@@ -97,6 +97,11 @@ best = "overall"             # or "no-hints-first"
 # data_dir = "../somewhere"  # where puzzles, progress and records live
 ```
 
+`dd settings move-data <folder>` copies your puzzles, progress and records
+to another folder and points `data_dir` at it. It never deletes anything:
+files already in the new folder are left as they are, and the old copy
+stays for you to remove.
+
 ## Counting moves
 
 A move is one drag: a block taken along any path while everything else stays
