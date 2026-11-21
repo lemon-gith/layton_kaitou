@@ -188,13 +188,21 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App, chrome: &Chrome) {
     let line = match &app.message {
         Some(message) => Line::from(Span::styled(message.clone(), chrome.warn())),
         None => {
+            // Whole hints only: those that do not fit are left off.
             let mut spans = Vec::new();
+            let mut used = 0usize;
             for binding in keys::table(app.context()).iter().filter(|b| b.footer) {
-                if !spans.is_empty() {
+                let sep = if spans.is_empty() { 0 } else { 3 };
+                let width = sep + binding.shown.chars().count() + 1 + binding.help.chars().count();
+                if used + width > area.width as usize {
+                    break;
+                }
+                if sep > 0 {
                     spans.push(Span::styled(" · ", chrome.dim()));
                 }
                 spans.push(Span::styled(binding.shown, chrome.text()));
                 spans.push(Span::styled(format!(" {}", binding.help), chrome.dim()));
+                used += width;
             }
             Line::from(spans)
         }
@@ -249,6 +257,19 @@ mod tests {
         app.handle(Key::Char('.'));
         let pause = screen_text(&app, 80, 30);
         assert!(pause.contains("Paused") && pause.contains("Quit to home") && pause.contains("not yet"), "{pause}");
+    }
+
+    #[test]
+    fn footer_hints_that_do_not_fit_are_left_off_whole() {
+        let tmp = TempDir::new();
+        let mut app = App::new(Home::at(&tmp.0)).unwrap();
+        app.handle(Key::Char('o'));
+        app.handle(Key::Enter);
+        let narrow = screen_text(&app, 60, 30);
+        let footer = narrow.lines().last().unwrap();
+        assert!(footer.contains("s select a block"), "{footer}");
+        assert!(!footer.contains("pause men") || footer.contains("pause menu"), "{footer}");
+        assert!(footer.trim_end().ends_with("undo") || footer.trim_end().ends_with("keys"), "{footer}");
     }
 
     #[test]
