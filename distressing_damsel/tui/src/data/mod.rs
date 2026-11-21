@@ -7,5 +7,8 @@
 
 pub mod fsio;
 pub mod home;
+// Used by the play screen.
+#[allow(dead_code)]
+pub mod progress;
 
 pub use home::Home;
