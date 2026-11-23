@@ -71,6 +71,10 @@ pub struct PaintOptions {
     pub grabbed: bool,
     /// Cells to tint faintly, such as where a held block can go.
     pub reach: Mask,
+    /// A faint copy of a block at another anchor: `(block, anchor)`.
+    pub ghost: Option<(usize, u8)>,
+    /// A block brightened by this much (0 to 1), for drawing attention.
+    pub pulse: Option<(usize, f32)>,
     /// Outline where the key block has to go.
     pub show_goal: bool,
     /// Outline empty cells.
@@ -87,6 +91,8 @@ impl Default for PaintOptions {
             selected: None,
             grabbed: false,
             reach: 0,
+            ghost: None,
+            pulse: None,
             show_goal: false,
             grid: true,
             grain: 1.0,
@@ -323,9 +329,36 @@ fn paint_image(game: &Game, theme: &Theme, options: &PaintOptions, hidden: Optio
                     if let Some(&(x0, y0, y1)) = boxes.get(&block) {
                         c = gloss(c, theme.gloss, x - x0, y - y0, y1 - y0 + 1);
                     }
+                    if let Some((b, amount)) = options.pulse {
+                        if b == block {
+                            c = c.shade(amount.clamp(0.0, 1.0) * 0.45);
+                        }
+                    }
                     c
                 }
             };
+        }
+    }
+
+    // A ghost: the block's face copied, faintly, to another anchor. Only
+    // empty floor shows it, so it never hides another block.
+    if let Some((block, to)) = options.ghost.filter(|&(b, _)| Some(b) != hidden) {
+        if let Some(from) = game.anchor(block) {
+            let (fx, fy) = layout.xy(from);
+            let (tx, ty) = layout.xy(to);
+            let dx = (tx as isize - fx as isize) * s as isize;
+            let dy = (ty as isize - fy as isize) * s as isize;
+            let face: Vec<usize> = (0..pw * ph).filter(|&i| owner[i] == Owner::Face(block)).collect();
+            for i in face {
+                let (x, y) = ((i % pw) as isize + dx, (i / pw) as isize + dy);
+                if x < 0 || y < 0 || x >= pw as isize || y >= ph as isize {
+                    continue;
+                }
+                let j = y as usize * pw + x as usize;
+                if owner[j] == Owner::Floor {
+                    pixels[j] = pixels[j].mix(pixels[i], 0.35);
+                }
+            }
         }
     }
 
@@ -664,6 +697,8 @@ mod tests {
                             selected: Some(0),
                             grabbed: grid,
                             reach: if show_goal { !0 } else { 0 },
+                            ghost: Some((0, 0)),
+                            pulse: Some((0, 0.5)),
                             show_goal,
                             grid,
                             grain: 1.5,
@@ -706,6 +741,24 @@ mod tests {
         assert_eq!(count(&h, theme.held), count(&s, theme.accent));
         let reach = PaintOptions { reach: bit(1) | bit(2), ..Default::default() };
         assert_ne!(paint(&game, theme, &reach), paint(&game, theme, &PaintOptions::default()));
+    }
+
+    #[test]
+    fn ghosts_show_faintly_on_floor_and_pulses_brighten() {
+        let game = game("A..\n...", ('A', 2, 1));
+        let theme = &THEMES[0];
+        let plain = paint(&game, theme, &PaintOptions::default());
+        let ghost = paint(&game, theme, &PaintOptions { ghost: Some((0, 2)), ..Default::default() });
+        assert_ne!(plain, ghost);
+        // The ghost sits over the empty cell at (2, 0), not over the block.
+        let (fs, ft, _) = theme.frame_size;
+        let s = 6;
+        let row = (ft + 1 + s / 2) / 2;
+        let at = |c: &Canvas, x: usize| c.glyphs[row * c.width + x];
+        assert_eq!(at(&plain, fs + 1 + s / 2), at(&ghost, fs + 1 + s / 2), "the block itself is unchanged");
+        assert_ne!(at(&plain, fs + 1 + 2 * s + s / 2), at(&ghost, fs + 1 + 2 * s + s / 2));
+        let pulsed = paint(&game, theme, &PaintOptions { pulse: Some((0, 1.0)), ..Default::default() });
+        assert!(at(&pulsed, fs + 1 + s / 2).bg.luma() > at(&plain, fs + 1 + s / 2).bg.luma());
     }
 
     #[test]
