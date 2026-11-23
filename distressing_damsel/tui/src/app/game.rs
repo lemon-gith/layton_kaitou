@@ -1,7 +1,9 @@
 //! The game screen: a puzzle, its saved progress, and how it is drawn.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::Path;
+use std::time::Instant;
 
 use dd_engine::{Game, PuzzleSpec};
 use ratatui::layout::Rect;
@@ -10,11 +12,12 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use super::draw::Chrome;
+use super::play::{Animation, Mode};
 use crate::data::library::Source;
 use crate::data::progress::{self, puzzle_id, Progress};
 use crate::data::records::Records;
-use crate::look::{canvas_size, paint, Canvas, PaintOptions};
-use crate::settings::Settings;
+use crate::look::{canvas_size, exit_opacity, exiting_block, paint, paint_moving, slide_offset, Canvas, Motion, PaintOptions, EXIT_MILLIS};
+use crate::settings::{Labels, Settings};
 use crate::ui::board::{fitting_scale, BoardView};
 
 /// Width of the side panel, in characters.
@@ -31,6 +34,14 @@ pub struct GameScreen {
     /// Set when the saved progress could not be read: saving is then off,
     /// so the file is never overwritten.
     pub not_saving: Option<String>,
+    pub mode: Mode,
+    /// Where the cursor was when selection last ended.
+    pub last_cursor: Option<usize>,
+    pub animation: Option<Animation>,
+    /// The exit, waiting for the last slide to finish.
+    pub pending_exit: Option<Animation>,
+    /// The solved puzzle's key block has faded out.
+    pub exited: bool,
     /// The last painted board, reused until something it shows changes.
     cache: RefCell<Option<(CacheKey, Canvas)>>,
 }
@@ -43,6 +54,10 @@ struct CacheKey {
     grain: u8,
     grid: bool,
     show_goal: bool,
+    selected: Option<usize>,
+    grabbed: bool,
+    labels: bool,
+    reach: u64,
 }
 
 /// Where the board and panel go.
@@ -67,7 +82,20 @@ impl GameScreen {
             Err(e) => (Progress::new(puzzle), Some(e)),
         };
         let warning = not_saving.as_ref().map(|e| format!("{e}; starting afresh and not saving over it"));
-        let screen = GameScreen { spec, code, source, progress, not_saving, cache: RefCell::new(None) };
+        let exited = progress.game.is_solved();
+        let screen = GameScreen {
+            spec,
+            code,
+            source,
+            progress,
+            not_saving,
+            mode: Mode::Base,
+            last_cursor: None,
+            animation: None,
+            pending_exit: None,
+            exited,
+            cache: RefCell::new(None),
+        };
         Ok((screen, warning))
     }
 
@@ -127,8 +155,54 @@ impl GameScreen {
         Arrangement { board, panel, scale: 4, cramped: true }
     }
 
-    fn canvas(&self, settings: &Settings, scale: usize) -> Canvas {
+    /// Whether block labels show: always, never, or in jump mode.
+    fn labels_shown(&self, settings: &Settings) -> bool {
+        match settings.labels {
+            Labels::Always => true,
+            Labels::OnDemand => matches!(self.mode, Mode::Jump { .. }),
+            Labels::Off => false,
+        }
+    }
+
+    fn paint_options(&self, settings: &Settings, scale: usize) -> PaintOptions {
+        let labels = if self.labels_shown(settings) {
+            self.game().puzzle().blocks.iter().enumerate().map(|(i, b)| (i, b.label.to_string())).collect()
+        } else {
+            HashMap::new()
+        };
+        PaintOptions {
+            scale,
+            labels,
+            selected: self.cursor(),
+            grabbed: matches!(self.mode, Mode::Grab { .. }),
+            reach: if settings.mark_reachable { self.reach() } else { 0 },
+            ..settings.paint_options()
+        }
+    }
+
+    /// The motion to draw now, if a block is moving, fading or gone.
+    fn motion(&self, scale: usize, now: Instant) -> Option<Motion> {
+        let elapsed = |started: &Instant| now.saturating_duration_since(*started).as_millis() as f32;
+        match &self.animation {
+            Some(Animation::Slide { block, path, started, millis }) => {
+                let t = elapsed(started) / *millis as f32;
+                Some(Motion { block: *block, offset: slide_offset(path, scale, t), opacity: 1.0 })
+            }
+            Some(Animation::Exit { block, started }) => {
+                let t = elapsed(started) / EXIT_MILLIS as f32;
+                Some(Motion { block: *block, offset: (0, 0), opacity: exit_opacity(t) })
+            }
+            None if self.exited => exiting_block(self.game()).map(|block| Motion { block, offset: (0, 0), opacity: 0.0 }),
+            None => None,
+        }
+    }
+
+    fn canvas(&self, settings: &Settings, scale: usize, now: Instant) -> Canvas {
         let game = self.game();
+        let options = self.paint_options(settings, scale);
+        if let Some(motion) = self.motion(scale, now) {
+            return paint_moving(game, settings.theme(), &options, motion);
+        }
         let key = CacheKey {
             anchors: (0..game.block_count()).map(|b| game.anchor(b)).collect(),
             scale,
@@ -136,21 +210,36 @@ impl GameScreen {
             grain: settings.grain,
             grid: settings.grid,
             show_goal: settings.show_goal,
+            selected: options.selected,
+            grabbed: options.grabbed,
+            labels: !options.labels.is_empty(),
+            reach: options.reach,
         };
         if let Some((cached, canvas)) = &*self.cache.borrow() {
             if *cached == key {
                 return canvas.clone();
             }
         }
-        let options = PaintOptions { scale, ..settings.paint_options() };
         let canvas = paint(game, settings.theme(), &options);
         *self.cache.borrow_mut() = Some((key, canvas.clone()));
         canvas
     }
 
+    /// A line for the side panel saying what the keys do now.
+    fn mode_line(&self) -> Option<String> {
+        let label = |b: usize| self.game().puzzle().blocks[b].label;
+        match self.mode {
+            Mode::Base if self.game().is_solved() => Some("solved".into()),
+            Mode::Base => None,
+            Mode::Select { cursor } => Some(format!("on {}", label(cursor))),
+            Mode::Grab { cursor, .. } => Some(format!("holding {}", label(cursor))),
+            Mode::Jump { .. } => Some("type a label".into()),
+        }
+    }
+
     pub fn draw(&self, frame: &mut Frame, area: Rect, settings: &Settings, records: &Records, chrome: &Chrome) {
         let arrangement = self.arrange(settings, area);
-        let canvas = self.canvas(settings, arrangement.scale);
+        let canvas = self.canvas(settings, arrangement.scale, Instant::now());
         frame.render_widget(BoardView(&canvas), arrangement.board);
 
         let game = self.game();
@@ -169,6 +258,10 @@ impl GameScreen {
             row("hints", self.progress.counters.hints.to_string()),
             row("solver", "—".into()),
         ];
+        if let Some(mode) = self.mode_line() {
+            lines.push(Line::default());
+            lines.push(Line::from(Span::styled(mode, chrome.selected())));
+        }
         if arrangement.cramped {
             let (w, h) = canvas_size(game, settings.theme(), 4);
             lines.push(Line::default());
@@ -223,9 +316,10 @@ mod tests {
         let tmp = TempDir::new();
         let screen = klotski(&tmp.0);
         let settings = Settings::default();
-        let first = screen.canvas(&settings, 6);
-        assert_eq!(screen.canvas(&settings, 6), first);
+        let now = Instant::now();
+        let first = screen.canvas(&settings, 6, now);
+        assert_eq!(screen.canvas(&settings, 6, now), first);
         let lighter = Settings { theme: "light".into(), ..Settings::default() };
-        assert_ne!(screen.canvas(&lighter, 6), first);
+        assert_ne!(screen.canvas(&lighter, 6, now), first);
     }
 }

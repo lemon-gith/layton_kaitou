@@ -67,6 +67,10 @@ pub struct PaintOptions {
     pub labels: HashMap<usize, String>,
     /// Block to outline as selected.
     pub selected: Option<usize>,
+    /// The selected block is held: its outline takes the held colour.
+    pub grabbed: bool,
+    /// Cells to tint faintly, such as where a held block can go.
+    pub reach: Mask,
     /// Outline where the key block has to go.
     pub show_goal: bool,
     /// Outline empty cells.
@@ -81,6 +85,8 @@ impl Default for PaintOptions {
             scale: 6,
             labels: HashMap::new(),
             selected: None,
+            grabbed: false,
+            reach: 0,
             show_goal: false,
             grid: true,
             grain: 1.0,
@@ -280,6 +286,12 @@ fn paint_image(game: &Game, theme: &Theme, options: &PaintOptions, hidden: Optio
                     if options.grid && grid_line {
                         c = c.shade(if theme.dark { theme.floor_grid } else { -theme.floor_grid });
                     }
+                    if options.reach != 0 && bx >= 0 && by >= 0 && (bx as usize) < w * s && (by as usize) < h * s {
+                        let cell = layout.cell((bx as usize / s) as u8, (by as usize / s) as u8);
+                        if options.reach & bit(cell) != 0 {
+                            c = c.mix(theme.accent, 0.16);
+                        }
+                    }
                     if options.show_goal && goal_face(xi, yi) {
                         let edge = [(0, -1), (0, 1), (-1, 0), (1, 0)]
                             .iter()
@@ -318,7 +330,7 @@ fn paint_image(game: &Game, theme: &Theme, options: &PaintOptions, hidden: Optio
     }
 
     // The exit: where a lone target meets the side it leaves by, the frame
-    // takes the goal colour, except along its outer edge.
+    // takes the key block's colour, except along its outer edge.
     if let (true, Some(dir)) = (single_key, game.puzzle().exit) {
         let (dx, dy) = dir.delta();
         for y in top..top + h * s {
@@ -336,26 +348,29 @@ fn paint_image(game: &Game, theme: &Theme, options: &PaintOptions, hidden: Optio
                     }
                     let i = py as usize * pw + px as usize;
                     if owner[i] == Owner::Frame {
-                        pixels[i] = pixels[i].mix(theme.goal, 0.8);
+                        pixels[i] = pixels[i].mix(theme.key, 0.8);
                     }
                 }
             }
         }
     }
 
-    // Selection: a ring just outside the block.
+    // Selection: a ring just outside the block, in the held colour while
+    // the block is held.
     let mut ring = HashSet::new();
     if let Some(sel) = options.selected.filter(|&b| Some(b) != hidden) {
         let face = |x: isize, y: isize| at(x, y) == Owner::Face(sel);
         for y in 0..ph as isize {
             for x in 0..pw as isize {
-                if !face(x, y) && (-1..=1).any(|dy| (-1..=1).any(|dx| face(x + dx, y + dy))) {
+                let on_frame = at(x, y) == Owner::Frame;
+                if !face(x, y) && !on_frame && (-1..=1).any(|dy| (-1..=1).any(|dx| face(x + dx, y + dy))) {
                     ring.insert(y as usize * pw + x as usize);
                 }
             }
         }
+        let colour = if options.grabbed { theme.held } else { theme.accent };
         for &i in &ring {
-            pixels[i] = theme.accent;
+            pixels[i] = colour;
         }
     }
 
@@ -647,6 +662,8 @@ mod tests {
                             scale,
                             labels: labels.clone(),
                             selected: Some(0),
+                            grabbed: grid,
+                            reach: if show_goal { !0 } else { 0 },
                             show_goal,
                             grid,
                             grain: 1.5,
@@ -673,6 +690,22 @@ mod tests {
                 assert_eq!(canvas_size(&game, theme, scale), (canvas.width, canvas.height));
             }
         }
+    }
+
+    #[test]
+    fn grabbed_blocks_and_reach_are_marked() {
+        let game = game("A..\n...", ('A', 2, 1));
+        let theme = &THEMES[0];
+        let selected = PaintOptions { selected: Some(0), ..Default::default() };
+        let held = PaintOptions { grabbed: true, ..selected.clone() };
+        let count = |c: &Canvas, colour| c.glyphs.iter().filter(|g| g.fg == colour || g.bg == colour).count();
+        let (s, h) = (paint(&game, theme, &selected), paint(&game, theme, &held));
+        // Same outline, different colour.
+        assert!(count(&s, theme.accent) > 0);
+        assert_eq!(count(&h, theme.accent), 0);
+        assert_eq!(count(&h, theme.held), count(&s, theme.accent));
+        let reach = PaintOptions { reach: bit(1) | bit(2), ..Default::default() };
+        assert_ne!(paint(&game, theme, &reach), paint(&game, theme, &PaintOptions::default()));
     }
 
     #[test]
@@ -767,6 +800,26 @@ mod tests {
         assert_eq!(exiting_block(&unsolved), None);
         let solved = game("A..\n...", ('A', 0, 0));
         assert_eq!(exiting_block(&solved), Some(0));
+    }
+
+    #[test]
+    fn exit_marker_takes_the_key_blocks_colour() {
+        // A lone block heading for the right edge: the frame beside the
+        // target is tinted towards the key colour, not the goal colour.
+        let game = game("A..\n...\n...", ('A', 2, 1));
+        for theme in &THEMES {
+            let canvas = paint(&game, theme, &PaintOptions::default());
+            let (fs, ft, _) = theme.frame_size;
+            let s = 6;
+            // Middle of the target cell's row, one character into the frame.
+            let row = (ft + 1 + s + s / 2) / 2;
+            let x = fs + 1 + 3 * s + 1;
+            let g = canvas.glyphs[row * canvas.width + x];
+            let near = |c: crate::look::Rgb, to: crate::look::Rgb| {
+                (c.0 as i32 - to.0 as i32).abs() + (c.1 as i32 - to.1 as i32).abs() + (c.2 as i32 - to.2 as i32).abs()
+            };
+            assert!(near(g.bg, theme.key) < near(g.bg, theme.frame), "{}: {:?}", theme.name, g.bg);
+        }
     }
 
     #[test]

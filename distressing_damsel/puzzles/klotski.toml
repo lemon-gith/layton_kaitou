@@ -1,13 +1,12 @@
 name = "Klotski"
-description = "The traditional sliding-block puzzle: bring the big square to the bottom centre."
+description = "The traditional sliding-block puzzle: bring the big square out through the exit on the right."
 grid = """
-ABBC
-ABBC
-DEEF
-DGHF
-I..J
+AABBC
+DDEF.
+DDEG.
+HHIIJ
 """
 
 [goal]
-block = "B"
-at = [1, 3]
+block = "D"
+at = [3, 1]

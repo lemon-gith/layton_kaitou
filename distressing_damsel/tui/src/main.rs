@@ -509,6 +509,11 @@ fn snapshot(args: &[String], out: &mut String) -> Result<(), String> {
             break;
         }
     }
+    // Let any slide, then any exit, finish: the picture shows where things
+    // settle.
+    let later = Instant::now() + std::time::Duration::from_secs(60);
+    app.tick(later);
+    app.tick(later + std::time::Duration::from_secs(60));
     put!(out, "{}", app::run::snapshot(&app, width, height));
     Ok(())
 }

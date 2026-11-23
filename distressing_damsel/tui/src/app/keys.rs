@@ -34,6 +34,22 @@ pub enum Action {
     // The game.
     Help,
     Pause,
+    /// Base mode to selection mode.
+    Select,
+    /// Into jump mode.
+    Jump,
+    /// A block label typed in jump mode.
+    Label(char),
+    /// Move the cursor, in selection mode.
+    Move(Dir),
+    /// Slide a block one cell: the held block, or with Shift the block
+    /// under the cursor.
+    Slide(Dir),
+    Grab,
+    Drop,
+    Undo,
+    Redo,
+    ToggleGoal,
     // The pause menu.
     Resume,
 }
@@ -61,7 +77,14 @@ pub enum Context {
     Home,
     List,
     Placeholder,
+    /// The game with no cursor.
     Game,
+    /// The game with a cursor on a block.
+    Select,
+    /// The game with a block held.
+    Grab,
+    /// The game waiting for a block label.
+    Jump,
     Pause,
     Help,
 }
@@ -72,6 +95,9 @@ pub fn table(context: Context) -> &'static [Binding] {
         Context::List => MENU,
         Context::Placeholder => PLACEHOLDER,
         Context::Game => GAME,
+        Context::Select => SELECT,
+        Context::Grab => GRAB,
+        Context::Jump => JUMP,
         Context::Pause => PAUSE,
         Context::Help => HELP,
     }
@@ -92,9 +118,43 @@ const HOME: &[Binding] = &[
 
 const PLACEHOLDER: &[Binding] = &[bind(&[Key::Esc, Key::Enter], "esc", "back", Action::Back, true)];
 
+const ARROWS: &[Key] = &[Key::Arrow(Dir::Up), Key::Arrow(Dir::Down), Key::Arrow(Dir::Left), Key::Arrow(Dir::Right)];
+const SHIFT_ARROWS: &[Key] =
+    &[Key::ShiftArrow(Dir::Up), Key::ShiftArrow(Dir::Down), Key::ShiftArrow(Dir::Left), Key::ShiftArrow(Dir::Right)];
+
 const GAME: &[Binding] = &[
+    bind(&[Key::Char('s')], "s", "select a block", Action::Select, true),
+    bind(&[Key::Char('j')], "j", "jump to a block", Action::Jump, true),
+    bind(&[Key::Char('u')], "u", "undo", Action::Undo, true),
+    bind(&[Key::Char('r')], "r", "redo", Action::Redo, false),
+    bind(&[Key::Char('g')], "g", "goal outline on/off", Action::ToggleGoal, false),
     bind(&[Key::Char('?')], "?", "keys", Action::Help, true),
     bind(&[Key::Char('.')], ".", "pause menu", Action::Pause, true),
+];
+
+const SELECT: &[Binding] = &[
+    bind(ARROWS, "arrows", "move the cursor", Action::Move(Dir::Up), true),
+    bind(SHIFT_ARROWS, "shift+arrows", "slide the block", Action::Slide(Dir::Up), true),
+    bind(&[Key::Char(' ')], "space", "grab the block", Action::Grab, true),
+    bind(&[Key::Char('j')], "j", "jump to a block", Action::Jump, false),
+    bind(&[Key::Char('u')], "u", "undo", Action::Undo, false),
+    bind(&[Key::Char('r')], "r", "redo", Action::Redo, false),
+    bind(&[Key::Char('g')], "g", "goal outline on/off", Action::ToggleGoal, false),
+    bind(&[Key::Esc], "esc", "leave selection", Action::Back, true),
+    bind(&[Key::Char('?')], "?", "keys", Action::Help, true),
+    bind(&[Key::Char('.')], ".", "pause menu", Action::Pause, false),
+];
+
+const GRAB: &[Binding] = &[
+    bind(ARROWS, "arrows", "slide the block", Action::Slide(Dir::Up), true),
+    bind(&[Key::Char(' '), Key::Enter], "space", "drop it", Action::Drop, true),
+    bind(&[Key::Esc], "esc", "put it back", Action::Back, true),
+    bind(&[Key::Char('?')], "?", "keys", Action::Help, true),
+];
+
+const JUMP: &[Binding] = &[
+    bind(&[], "a label", "jump to that block", Action::Label(' '), true),
+    bind(&[Key::Esc], "esc", "cancel", Action::Back, true),
 ];
 
 const PAUSE: &[Binding] = &[
@@ -113,9 +173,16 @@ pub fn lookup(context: Context, key: Key) -> Option<Action> {
         return Some(Action::Quit);
     }
     let bound = table(context).iter().find(|b| b.keys.contains(&key)).map(|b| b.action);
+    // Arrow bindings carry the direction of the arrow pressed.
+    let bound = match (bound, key) {
+        (Some(Action::Move(_)), Key::Arrow(d)) => Some(Action::Move(d)),
+        (Some(Action::Slide(_)), Key::Arrow(d) | Key::ShiftArrow(d)) => Some(Action::Slide(d)),
+        (other, _) => other,
+    };
     match (bound, key, context) {
         (Some(action), _, _) => Some(action),
         (None, Key::Char(c), Context::Home | Context::Pause) => Some(Action::Shortcut(c)),
+        (None, Key::Char(c), Context::Jump) if c.is_ascii_alphanumeric() => Some(Action::Label(c)),
         _ => None,
     }
 }
@@ -126,7 +193,17 @@ mod tests {
 
     #[test]
     fn no_key_is_bound_twice_in_a_context() {
-        for context in [Context::Home, Context::List, Context::Placeholder, Context::Game, Context::Pause, Context::Help] {
+        for context in [
+            Context::Home,
+            Context::List,
+            Context::Placeholder,
+            Context::Game,
+            Context::Select,
+            Context::Grab,
+            Context::Jump,
+            Context::Pause,
+            Context::Help,
+        ] {
             let keys: Vec<Key> = table(context).iter().flat_map(|b| b.keys.iter().copied()).collect();
             for (i, k) in keys.iter().enumerate() {
                 assert!(!keys[i + 1..].contains(k), "{k:?} bound twice in {context:?}");
@@ -141,5 +218,21 @@ mod tests {
         assert_eq!(lookup(Context::Pause, Key::Char('q')), Some(Action::Shortcut('q')));
         assert_eq!(lookup(Context::Pause, Key::Char('.')), Some(Action::Resume));
         assert_eq!(lookup(Context::Game, Key::Char('z')), None);
+    }
+
+    #[test]
+    fn arrows_carry_their_direction() {
+        assert_eq!(lookup(Context::Select, Key::Arrow(Dir::Left)), Some(Action::Move(Dir::Left)));
+        assert_eq!(lookup(Context::Select, Key::ShiftArrow(Dir::Down)), Some(Action::Slide(Dir::Down)));
+        assert_eq!(lookup(Context::Grab, Key::Arrow(Dir::Right)), Some(Action::Slide(Dir::Right)));
+        assert_eq!(lookup(Context::Game, Key::Arrow(Dir::Right)), None);
+    }
+
+    #[test]
+    fn jump_mode_takes_labels_and_nothing_else() {
+        assert_eq!(lookup(Context::Jump, Key::Char('B')), Some(Action::Label('B')));
+        assert_eq!(lookup(Context::Jump, Key::Char('7')), Some(Action::Label('7')));
+        assert_eq!(lookup(Context::Jump, Key::Char('.')), None);
+        assert_eq!(lookup(Context::Jump, Key::Esc), Some(Action::Back));
     }
 }

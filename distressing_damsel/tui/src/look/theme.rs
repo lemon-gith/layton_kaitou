@@ -82,6 +82,8 @@ pub struct Theme {
     pub goal: Rgb,
     /// Selection outline.
     pub accent: Rgb,
+    /// Selection outline while the block is held.
+    pub held: Rgb,
     pub text: Rgb,
     pub text_on_light: Rgb,
 }
@@ -161,6 +163,7 @@ pub const THEMES: [Theme; 5] = [
         grain: 0.0,
         goal: Rgb::hex(0xe0525a),
         accent: Rgb::hex(0xf2f2f2),
+        held: Rgb::hex(0x66d9ff),
         text: Rgb::hex(0xf4f4f4),
         text_on_light: Rgb::hex(0x14161b),
     },
@@ -186,6 +189,7 @@ pub const THEMES: [Theme; 5] = [
         grain: 0.0,
         goal: Rgb::hex(0xd9434d),
         accent: Rgb::hex(0x1d2230),
+        held: Rgb::hex(0x0077b6),
         text: Rgb::hex(0xffffff),
         text_on_light: Rgb::hex(0x1d2230),
     },
@@ -211,6 +215,7 @@ pub const THEMES: [Theme; 5] = [
         grain: 1.0,
         goal: Rgb::hex(0xf0b648),
         accent: Rgb::hex(0xffe39a),
+        held: Rgb::hex(0x8ee8ff),
         text: Rgb::hex(0xfbf3e4),
         text_on_light: Rgb::hex(0x24170d),
     },
@@ -236,6 +241,7 @@ pub const THEMES: [Theme; 5] = [
         grain: 0.85,
         goal: Rgb::hex(0xb8710f),
         accent: Rgb::hex(0x3a2210),
+        held: Rgb::hex(0x0f6f8f),
         text: Rgb::hex(0xfffaf0),
         text_on_light: Rgb::hex(0x2e1c0e),
     },
@@ -261,6 +267,7 @@ pub const THEMES: [Theme; 5] = [
         grain: 0.75,
         goal: Rgb::hex(0xf2c14e),
         accent: Rgb::hex(0xffe7a3),
+        held: Rgb::hex(0x9fe8ff),
         text: Rgb::hex(0xfff8ec),
         text_on_light: Rgb::hex(0x24150b),
     },

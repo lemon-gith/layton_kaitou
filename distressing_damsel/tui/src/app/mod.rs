@@ -5,16 +5,20 @@
 //! Neither touches the terminal, so both are tested directly. Loading and
 //! saving go through [`crate::data`] in the app's [`Home`] folder.
 
+pub mod cursor;
 pub mod draw;
 pub mod game;
 pub mod keys;
 pub mod menu;
+pub mod play;
 pub mod run;
+
+use std::time::Instant;
 
 use dd_engine::{file, PuzzleSpec};
 
 use crate::data::library::{self, LastPuzzle, Source};
-use crate::data::records::Records;
+use crate::data::records::{Records, Score};
 use crate::data::Home;
 use crate::puzzles::BUILT_IN;
 use crate::settings::Settings;
@@ -101,7 +105,14 @@ impl App {
     /// Whether something is moving and the screen needs redrawing without a
     /// key press.
     pub fn animating(&self) -> bool {
-        false
+        matches!(&self.screen, Screen::Game(g) if g.animating() || g.pending_exit.is_some())
+    }
+
+    /// Moves animations on to `now`.
+    pub fn tick(&mut self, now: Instant) {
+        if let Screen::Game(game) = &mut self.screen {
+            game.advance(now);
+        }
     }
 
     /// The context whose keys are live.
@@ -112,7 +123,7 @@ impl App {
             None => match &self.screen {
                 Screen::Home(_) => Context::Home,
                 Screen::Open(..) => Context::List,
-                Screen::Game(_) => Context::Game,
+                Screen::Game(game) => game.context(),
                 Screen::Placeholder { .. } => Context::Placeholder,
             },
         }
@@ -186,10 +197,26 @@ impl App {
                 }
                 _ => {}
             },
-            Screen::Game(_) => match action {
-                Action::Help => self.overlays.push(Overlay::Help(Context::Game)),
-                Action::Pause => self.overlays.push(Overlay::Pause(pause_menu())),
-                _ => {}
+            Screen::Game(game) => match action {
+                Action::Help => {
+                    let context = game.context();
+                    self.overlays.push(Overlay::Help(context));
+                }
+                Action::Pause => {
+                    game.snap();
+                    self.overlays.push(Overlay::Pause(pause_menu()));
+                }
+                Action::ToggleGoal => {
+                    self.settings.show_goal = !self.settings.show_goal;
+                    if let Err(e) = self.settings.save(&self.home) {
+                        self.message = Some(e);
+                    }
+                }
+                action => {
+                    if game.act(action, Instant::now(), self.settings.animations) == Some(play::Event::Solved) {
+                        self.record_solve();
+                    }
+                }
             },
             Screen::Placeholder { .. } => {
                 if action == Action::Back {
@@ -355,6 +382,25 @@ impl App {
         }
     }
 
+    /// Records a solve of the open puzzle and says so in the footer.
+    fn record_solve(&mut self) {
+        let Screen::Game(game) = &self.screen else { return };
+        let moves = game.game().move_count();
+        let score = Score::new(moves, game.progress.counters);
+        let (id, title) = (game.id(), game.title().to_string());
+        let improvement = self.records.add_solve(&id, &title, score, self.settings.best);
+        let data_dir = self.data_dir();
+        let saved = self.records.save(&data_dir).and_then(|()| match &self.screen {
+            Screen::Game(game) => game.save(&data_dir),
+            _ => Ok(()),
+        });
+        self.message = Some(match saved {
+            Err(e) => e,
+            Ok(()) if improvement.shown => format!("{} · new best!", solved_message(&score)),
+            Ok(()) => solved_message(&score),
+        });
+    }
+
     /// Saves progress if a game is open. The screen stays as it is.
     pub fn leave_game(&mut self) {
         if let Screen::Game(game) = &self.screen {
@@ -363,6 +409,19 @@ impl App {
             }
         }
     }
+}
+
+/// "Solved in 12 moves", with any help it had.
+fn solved_message(score: &Score) -> String {
+    let plural = |n: u32, word: &str| format!("{n} {word}{}", if n == 1 { "" } else { "s" });
+    let mut text = format!("Solved in {}", plural(score.moves, "move"));
+    if score.hints > 0 {
+        text.push_str(&format!(" with {}", plural(score.hints, "hint")));
+    }
+    if score.solution_viewed {
+        text.push_str(", having viewed the solution");
+    }
+    text
 }
 
 fn pause_menu() -> Menu<PauseItem> {
@@ -498,5 +557,50 @@ mod tests {
         assert!(app.message.as_deref().unwrap_or("").contains("not saving"));
         press(&mut app, &[Key::Char('.'), Key::Char('q')]);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "garbage [");
+    }
+
+    fn tiny(app: &mut App) {
+        let mut spec = PuzzleSpec::from_grid("A.\n..").unwrap();
+        spec.name = "Tiny".into();
+        spec.goals.push(dd_engine::GoalSpec { block: 'A', x: 1, y: 1 });
+        app.open_puzzle(spec, Source::Code);
+    }
+
+    #[test]
+    fn solving_records_a_best_and_says_so() {
+        let (tmp, mut app) = app();
+        tiny(&mut app);
+        press(&mut app, &[Key::Char('s'), Key::ShiftArrow(Dir::Right), Key::ShiftArrow(Dir::Down)]);
+        assert_eq!(app.message.as_deref(), Some("Solved in 1 move · new best!"));
+        let records = Records::load(&tmp.0).unwrap();
+        let record = records.get(&game(&app).id()).unwrap();
+        assert_eq!(record.solves, 1);
+        assert_eq!(record.best.map(|s| s.moves), Some(1));
+        assert!(app.animating(), "the exit plays");
+
+        // Solving again the same way is not a new best.
+        press(&mut app, &[Key::Char('u'), Key::Char('s'), Key::ShiftArrow(Dir::Down), Key::ShiftArrow(Dir::Right)]);
+        assert_eq!(app.message.as_deref(), Some("Solved in 1 move"));
+    }
+
+    #[test]
+    fn solved_messages_read_naturally() {
+        let score = |moves, hints, solution_viewed| Score { moves, hints, solution_viewed };
+        assert_eq!(solved_message(&score(1, 0, false)), "Solved in 1 move");
+        assert_eq!(solved_message(&score(85, 2, false)), "Solved in 85 moves with 2 hints");
+        assert_eq!(solved_message(&score(81, 1, true)), "Solved in 81 moves with 1 hint, having viewed the solution");
+    }
+
+    #[test]
+    fn goal_toggle_is_saved_and_help_follows_the_mode() {
+        let (tmp, mut app) = app();
+        tiny(&mut app);
+        press(&mut app, &[Key::Char('g')]);
+        assert!(app.settings.show_goal);
+        assert!(Settings::load(&Home::at(&tmp.0)).unwrap().show_goal);
+        press(&mut app, &[Key::Char('s'), Key::Char(' '), Key::Char('?')]);
+        assert!(matches!(app.overlays.last(), Some(Overlay::Help(Context::Grab))));
+        press(&mut app, &[Key::Esc]);
+        assert_eq!(app.context(), Context::Grab, "closing help leaves the block held");
     }
 }

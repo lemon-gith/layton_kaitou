@@ -45,6 +45,7 @@ pub fn key_from(event: KeyEvent) -> Option<Key> {
 pub fn run(app: &mut App) -> io::Result<()> {
     let mut terminal = ratatui::try_init()?;
     let result = (|| loop {
+        app.tick(std::time::Instant::now());
         terminal.draw(|frame| app.draw(frame))?;
         // Block until a key arrives, unless something is moving.
         if app.animating() && !event::poll(FRAME)? {

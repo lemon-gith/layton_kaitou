@@ -37,6 +37,20 @@ cargo run --release -- solve path/to/puzzle.toml --boards
 
 `dd help` lists every command and option.
 
+## Playing
+
+- `s` puts a cursor on a block; the arrows move it between blocks.
+- Shift+arrow slides the block under the cursor one cell. Space grabs it
+  instead: the arrows then slide it, Space or Enter drops it, and Esc puts
+  it back where the grab began.
+- `j` shows every block's label; type one to jump the cursor there.
+- `u` and `r` undo and redo whole moves; `g` shows or hides the goal.
+- Esc steps back a mode, `?` lists the keys for the mode you are in, and
+  `.` opens the pause menu.
+
+Progress saves when you leave a puzzle, and Continue on the home screen
+returns you to it.
+
 ## Puzzle files
 
 ```toml
