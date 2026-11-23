@@ -50,6 +50,14 @@ pub enum Action {
     Undo,
     Redo,
     ToggleGoal,
+    Hint,
+    // Dialogues.
+    Yes,
+    No,
+    /// Move between a dialogue's choices.
+    NextChoice,
+    /// Tick or untick "don't ask again".
+    ToggleDontAsk,
     // The pause menu.
     Resume,
 }
@@ -87,6 +95,8 @@ pub enum Context {
     Jump,
     Pause,
     Help,
+    /// A yes-or-no dialogue.
+    Confirm,
 }
 
 pub fn table(context: Context) -> &'static [Binding] {
@@ -100,6 +110,7 @@ pub fn table(context: Context) -> &'static [Binding] {
         Context::Jump => JUMP,
         Context::Pause => PAUSE,
         Context::Help => HELP,
+        Context::Confirm => CONFIRM,
     }
 }
 
@@ -128,6 +139,7 @@ const GAME: &[Binding] = &[
     bind(&[Key::Char('u')], "u", "undo", Action::Undo, true),
     bind(&[Key::Char('r')], "r", "redo", Action::Redo, false),
     bind(&[Key::Char('g')], "g", "goal outline on/off", Action::ToggleGoal, false),
+    bind(&[Key::Char('h')], "h", "hint", Action::Hint, false),
     bind(&[Key::Char('?')], "?", "keys", Action::Help, true),
     bind(&[Key::Char('.')], ".", "pause menu", Action::Pause, true),
 ];
@@ -140,6 +152,7 @@ const SELECT: &[Binding] = &[
     bind(&[Key::Char('u')], "u", "undo", Action::Undo, false),
     bind(&[Key::Char('r')], "r", "redo", Action::Redo, false),
     bind(&[Key::Char('g')], "g", "goal outline on/off", Action::ToggleGoal, false),
+    bind(&[Key::Char('h')], "h", "hint", Action::Hint, false),
     bind(&[Key::Esc], "esc", "leave selection", Action::Back, true),
     bind(&[Key::Char('?')], "?", "keys", Action::Help, true),
     bind(&[Key::Char('.')], ".", "pause menu", Action::Pause, false),
@@ -162,6 +175,14 @@ const PAUSE: &[Binding] = &[
     bind(&[UP, Key::BackTab], "↑ ↓", "choose", Action::Up, true),
     bind(&[DOWN, Key::Tab], "", "", Action::Down, false),
     bind(&[Key::Enter], "enter", "pick", Action::Choose, true),
+];
+
+const CONFIRM: &[Binding] = &[
+    bind(&[Key::Char('y')], "y", "yes", Action::Yes, true),
+    bind(&[Key::Char('n'), Key::Esc], "n", "no", Action::No, true),
+    bind(&[Key::Tab, Key::BackTab, Key::Arrow(Dir::Left), Key::Arrow(Dir::Right)], "tab", "switch", Action::NextChoice, true),
+    bind(&[Key::Enter], "enter", "choose", Action::Choose, true),
+    bind(&[Key::Char(' ')], "space", "don't ask again", Action::ToggleDontAsk, false),
 ];
 
 const HELP: &[Binding] = &[bind(&[Key::Esc, Key::Char('?'), Key::Enter], "esc", "close", Action::Back, true)];
@@ -203,6 +224,7 @@ mod tests {
             Context::Jump,
             Context::Pause,
             Context::Help,
+            Context::Confirm,
         ] {
             let keys: Vec<Key> = table(context).iter().flat_map(|b| b.keys.iter().copied()).collect();
             for (i, k) in keys.iter().enumerate() {

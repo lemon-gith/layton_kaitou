@@ -504,12 +504,23 @@ fn snapshot(args: &[String], out: &mut String) -> Result<(), String> {
         };
         app.open_puzzle(load(&name)?, source);
     }
+    // Searches run on their own threads: give them up to ten seconds, so
+    // hints work and the solver's result shows.
+    let wait_for_searches = |app: &mut app::App| {
+        let deadline = Instant::now() + std::time::Duration::from_secs(10);
+        while app.searching() && Instant::now() < deadline {
+            app.tick(Instant::now());
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    };
+    wait_for_searches(&mut app);
     for key in keys {
         if app.handle(key) == app::Flow::Quit {
             break;
         }
     }
-    // Let any slide, then any exit, finish: the picture shows where things
+    wait_for_searches(&mut app);
+    // Let any slide, pulse or exit finish: the picture shows where things
     // settle.
     let later = Instant::now() + std::time::Duration::from_secs(60);
     app.tick(later);

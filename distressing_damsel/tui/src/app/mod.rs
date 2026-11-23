@@ -8,10 +8,12 @@
 pub mod cursor;
 pub mod draw;
 pub mod game;
+pub mod hints;
 pub mod keys;
 pub mod menu;
 pub mod play;
 pub mod run;
+pub mod solving;
 
 use std::time::Instant;
 
@@ -73,6 +75,38 @@ pub enum Overlay {
     /// Keys for the context underneath.
     Help(Context),
     Pause(Menu<PauseItem>),
+    Confirm(Confirm),
+}
+
+/// What a yes-or-no dialogue is asking about.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Question {
+    Hint,
+}
+
+/// A yes-or-no dialogue.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Confirm {
+    pub question: Question,
+    pub title: &'static str,
+    pub text: &'static str,
+    /// Offered only where answering once may be enough: whether it is
+    /// ticked.
+    pub dont_ask: Option<bool>,
+    /// Which button Enter presses.
+    pub yes_focused: bool,
+}
+
+impl Confirm {
+    fn hint() -> Confirm {
+        Confirm {
+            question: Question::Hint,
+            title: " Hint ",
+            text: "Take a hint? It counts towards this attempt.",
+            dont_ask: Some(false),
+            yes_focused: true,
+        }
+    }
 }
 
 pub struct App {
@@ -105,13 +139,21 @@ impl App {
     /// Whether something is moving and the screen needs redrawing without a
     /// key press.
     pub fn animating(&self) -> bool {
-        matches!(&self.screen, Screen::Game(g) if g.animating() || g.pending_exit.is_some())
+        let now = Instant::now();
+        matches!(&self.screen, Screen::Game(g) if g.animating() || g.pending_exit.is_some() || g.busy(now))
     }
 
-    /// Moves animations on to `now`.
+    /// Whether a background search is still running.
+    pub fn searching(&self) -> bool {
+        matches!(&self.screen, Screen::Game(g)
+            if matches!(g.solver, hints::SolverState::Running(_)) || g.hint_search.is_some())
+    }
+
+    /// Moves animations on to `now` and collects finished searches.
     pub fn tick(&mut self, now: Instant) {
         if let Screen::Game(game) = &mut self.screen {
             game.advance(now);
+            game.poll_solver(now);
         }
     }
 
@@ -120,6 +162,7 @@ impl App {
         match self.overlays.last() {
             Some(Overlay::Help(_)) => Context::Help,
             Some(Overlay::Pause(_)) => Context::Pause,
+            Some(Overlay::Confirm(_)) => Context::Confirm,
             None => match &self.screen {
                 Screen::Home(_) => Context::Home,
                 Screen::Open(..) => Context::List,
@@ -143,6 +186,29 @@ impl App {
                 Overlay::Help(_) => {
                     if action == Action::Back {
                         self.overlays.pop();
+                    }
+                }
+                Overlay::Confirm(confirm) => {
+                    let answer = match action {
+                        Action::Yes => Some(true),
+                        Action::No => Some(false),
+                        Action::Choose => Some(confirm.yes_focused),
+                        Action::NextChoice => {
+                            confirm.yes_focused = !confirm.yes_focused;
+                            None
+                        }
+                        Action::ToggleDontAsk => {
+                            if let Some(ticked) = &mut confirm.dont_ask {
+                                *ticked = !*ticked;
+                            }
+                            None
+                        }
+                        _ => None,
+                    };
+                    if let Some(yes) = answer {
+                        let confirm = confirm.clone();
+                        self.overlays.pop();
+                        self.answer(&confirm, yes);
                     }
                 }
                 Overlay::Pause(menu) => {
@@ -206,6 +272,11 @@ impl App {
                     game.snap();
                     self.overlays.push(Overlay::Pause(pause_menu()));
                 }
+                Action::Hint => match game.hint_ready() {
+                    Err(why) => self.message = Some(why.to_string()),
+                    Ok(()) if self.settings.confirm_hints => self.overlays.push(Overlay::Confirm(Confirm::hint())),
+                    Ok(()) => game.give_hint(Instant::now()),
+                },
                 Action::ToggleGoal => {
                     self.settings.show_goal = !self.settings.show_goal;
                     if let Err(e) = self.settings.save(&self.home) {
@@ -379,6 +450,23 @@ impl App {
                 self.screen = Screen::Game(Box::new(game));
             }
             Err(e) => self.message = Some(e),
+        }
+    }
+
+    /// Acts on the answer to a dialogue.
+    fn answer(&mut self, confirm: &Confirm, yes: bool) {
+        match confirm.question {
+            Question::Hint => {
+                if yes && confirm.dont_ask == Some(true) {
+                    self.settings.confirm_hints = false;
+                    if let Err(e) = self.settings.save(&self.home) {
+                        self.message = Some(e);
+                    }
+                }
+                if let (true, Screen::Game(game)) = (yes, &mut self.screen) {
+                    game.give_hint(Instant::now());
+                }
+            }
         }
     }
 
@@ -602,5 +690,52 @@ mod tests {
         assert!(matches!(app.overlays.last(), Some(Overlay::Help(Context::Grab))));
         press(&mut app, &[Key::Esc]);
         assert_eq!(app.context(), Context::Grab, "closing help leaves the block held");
+    }
+
+    /// Ticks the app until the open puzzle's solver has finished.
+    fn settle(app: &mut App) {
+        for _ in 0..2000 {
+            app.tick(Instant::now());
+            if let Screen::Game(g) = &app.screen {
+                if !matches!(g.solver, hints::SolverState::Running(_)) && g.hint_search.is_none() {
+                    return;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        panic!("solver did not finish");
+    }
+
+    #[test]
+    fn hints_ask_first_unless_told_not_to() {
+        let (tmp, mut app) = app();
+        press(&mut app, &[Key::Char('o'), Key::Enter]);
+        // Before the solver has reported, a hint is refused with a reason.
+        press(&mut app, &[Key::Char('h')]);
+        assert!(app.message.as_deref().unwrap_or("").contains("still working"));
+        settle(&mut app);
+
+        // "No" closes the dialogue and gives nothing.
+        press(&mut app, &[Key::Char('h')]);
+        assert_eq!(app.context(), Context::Confirm);
+        press(&mut app, &[Key::Char('n')]);
+        assert_eq!(app.context(), Context::Game);
+        assert!(game(&app).hint.is_none());
+
+        // Tab moves the focus to No; Enter then declines too.
+        press(&mut app, &[Key::Char('h'), Key::Tab, Key::Enter]);
+        assert!(game(&app).hint.is_none());
+
+        // Tick "don't ask again" and say yes: a hint, and no more asking.
+        press(&mut app, &[Key::Char('h'), Key::Char(' '), Key::Char('y')]);
+        assert!(game(&app).hint.is_some());
+        assert_eq!(game(&app).progress.counters.hints, 1);
+        assert!(!app.settings.confirm_hints);
+        assert!(!Settings::load(&Home::at(&tmp.0)).unwrap().confirm_hints);
+
+        // The next hint comes straight away, with no dialogue.
+        press(&mut app, &[Key::Char('h')]);
+        assert_eq!(app.context(), Context::Game);
+        assert_eq!(game(&app).progress.counters.hints, 2);
     }
 }

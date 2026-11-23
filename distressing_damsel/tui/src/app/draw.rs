@@ -77,6 +77,7 @@ impl App {
                     let lines = menu_lines(menu, &chrome, true);
                     draw_box(frame, main, " Paused ", lines, &chrome);
                 }
+                Overlay::Confirm(confirm) => draw_confirm(frame, main, confirm, &chrome),
             }
         }
         draw_footer(frame, footer, self, &chrome);
@@ -171,6 +172,34 @@ fn draw_box(frame: &mut Frame, area: Rect, title: &str, lines: Vec<Line>, chrome
     frame.render_widget(block, rect);
     let inner = Rect::new(inner.x + 1, inner.y, inner.width.saturating_sub(2), inner.height);
     frame.render_widget(Paragraph::new(lines).style(chrome.text()), inner);
+}
+
+/// A yes-or-no dialogue: the question, the "don't ask again" box where it
+/// is offered, and the two buttons, the focused one marked.
+fn draw_confirm(frame: &mut Frame, area: Rect, confirm: &super::Confirm, chrome: &Chrome) {
+    let button = |label: &str, focused: bool| {
+        if focused {
+            Span::styled(format!("▸ {label} "), chrome.selected())
+        } else {
+            Span::styled(format!("  {label} "), chrome.text())
+        }
+    };
+    let mut lines = vec![Line::from(Span::styled(confirm.text, chrome.text())), Line::default()];
+    if let Some(ticked) = confirm.dont_ask {
+        let mark = if ticked { "[x]" } else { "[ ]" };
+        lines.push(Line::from(vec![
+            Span::styled(format!("{mark} "), chrome.text()),
+            Span::styled("don't ask again", chrome.dim()),
+            Span::styled("  (space)", chrome.dim()),
+        ]));
+        lines.push(Line::default());
+    }
+    lines.push(Line::from(vec![
+        button("Yes (y)", confirm.yes_focused),
+        Span::styled("   ", chrome.text()),
+        button("No (n)", !confirm.yes_focused),
+    ]));
+    draw_box(frame, area, confirm.title, lines, chrome);
 }
 
 /// Keys of the context under the help box, from the same table that
