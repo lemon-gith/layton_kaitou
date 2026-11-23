@@ -67,7 +67,7 @@ pub struct PaintOptions {
     pub labels: HashMap<usize, String>,
     /// Block to outline as selected.
     pub selected: Option<usize>,
-    /// The selected block is held: its outline is drawn twice as thick.
+    /// The selected block is held: its outline takes the held colour.
     pub grabbed: bool,
     /// Cells to tint faintly, such as where a held block can go.
     pub reach: Mask,
@@ -355,21 +355,22 @@ fn paint_image(game: &Game, theme: &Theme, options: &PaintOptions, hidden: Optio
         }
     }
 
-    // Selection: a ring just outside the block, twice as thick when held.
+    // Selection: a ring just outside the block, in the held colour while
+    // the block is held.
     let mut ring = HashSet::new();
     if let Some(sel) = options.selected.filter(|&b| Some(b) != hidden) {
         let face = |x: isize, y: isize| at(x, y) == Owner::Face(sel);
-        let r: isize = if options.grabbed { 2 } else { 1 };
         for y in 0..ph as isize {
             for x in 0..pw as isize {
                 let on_frame = at(x, y) == Owner::Frame;
-                if !face(x, y) && !on_frame && (-r..=r).any(|dy| (-r..=r).any(|dx| face(x + dx, y + dy))) {
+                if !face(x, y) && !on_frame && (-1..=1).any(|dy| (-1..=1).any(|dx| face(x + dx, y + dy))) {
                     ring.insert(y as usize * pw + x as usize);
                 }
             }
         }
+        let colour = if options.grabbed { theme.held } else { theme.accent };
         for &i in &ring {
-            pixels[i] = theme.accent;
+            pixels[i] = colour;
         }
     }
 
@@ -697,8 +698,12 @@ mod tests {
         let theme = &THEMES[0];
         let selected = PaintOptions { selected: Some(0), ..Default::default() };
         let held = PaintOptions { grabbed: true, ..selected.clone() };
-        let accents = |c: &Canvas| c.glyphs.iter().filter(|g| g.fg == theme.accent || g.bg == theme.accent).count();
-        assert!(accents(&paint(&game, theme, &held)) > accents(&paint(&game, theme, &selected)));
+        let count = |c: &Canvas, colour| c.glyphs.iter().filter(|g| g.fg == colour || g.bg == colour).count();
+        let (s, h) = (paint(&game, theme, &selected), paint(&game, theme, &held));
+        // Same outline, different colour.
+        assert!(count(&s, theme.accent) > 0);
+        assert_eq!(count(&h, theme.accent), 0);
+        assert_eq!(count(&h, theme.held), count(&s, theme.accent));
         let reach = PaintOptions { reach: bit(1) | bit(2), ..Default::default() };
         assert_ne!(paint(&game, theme, &reach), paint(&game, theme, &PaintOptions::default()));
     }
