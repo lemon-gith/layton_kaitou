@@ -236,6 +236,42 @@ impl GameScreen {
         }
     }
 
+    /// Starts a new attempt: back to the starting position with an empty
+    /// history, and hints and solution views counted afresh. Checkpoints
+    /// stay.
+    pub fn restart(&mut self) {
+        self.progress.game.reset();
+        self.progress.counters = Default::default();
+        self.mode = Mode::Base;
+        self.animation = None;
+        self.pending_exit = None;
+        self.exited = false;
+        self.hint = None;
+        self.hint_search = None;
+    }
+
+    /// Whether the current route is already saved as a checkpoint.
+    pub fn on_checkpoint(&self) -> bool {
+        let history = self.game().history();
+        self.progress.checkpoints.iter().any(|c| c.history == history)
+    }
+
+    /// Saves the current route as a checkpoint, returning its number, or
+    /// `None` if it is already one.
+    pub fn keep_checkpoint(&mut self) -> Option<u32> {
+        if self.on_checkpoint() {
+            return None;
+        }
+        let number = self.progress.next_checkpoint;
+        self.progress.next_checkpoint += 1;
+        self.progress.checkpoints.push(crate::data::progress::Checkpoint {
+            number,
+            history: self.game().history().to_vec(),
+            counters: self.progress.counters,
+        });
+        Some(number)
+    }
+
     /// Moves on from a finished slide to a waiting exit animation.
     pub fn advance(&mut self, now: Instant) {
         self.tick(now);

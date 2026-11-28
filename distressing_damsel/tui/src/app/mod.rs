@@ -82,6 +82,9 @@ pub enum Overlay {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Question {
     Hint,
+    Restart,
+    /// Before restarting: keep the current position as a checkpoint?
+    KeepBeforeRestart,
 }
 
 /// A yes-or-no dialogue.
@@ -104,6 +107,26 @@ impl Confirm {
             title: " Hint ",
             text: "Take a hint? It counts towards this attempt.",
             dont_ask: Some(false),
+            yes_focused: true,
+        }
+    }
+
+    fn restart() -> Confirm {
+        Confirm {
+            question: Question::Restart,
+            title: " Restart ",
+            text: "Restart this puzzle? Your moves, hints and solution views start again.",
+            dont_ask: None,
+            yes_focused: false,
+        }
+    }
+
+    fn keep_before_restart() -> Confirm {
+        Confirm {
+            question: Question::KeepBeforeRestart,
+            title: " Keep this position? ",
+            text: "Keep your current position as a checkpoint before restarting?",
+            dont_ask: None,
             yes_focused: true,
         }
     }
@@ -331,8 +354,9 @@ impl App {
                 self.leave_game();
                 self.go_home();
             }
+            PauseItem::Restart => self.overlays.push(Overlay::Confirm(Confirm::restart())),
             // Not built yet; the menu shows them disabled.
-            PauseItem::Restart | PauseItem::Checkpoints | PauseItem::Solution => {}
+            PauseItem::Checkpoints | PauseItem::Solution => {}
         }
         Flow::Continue
     }
@@ -467,7 +491,35 @@ impl App {
                     game.give_hint(Instant::now());
                 }
             }
+            Question::Restart => {
+                let Screen::Game(game) = &self.screen else { return };
+                if !yes {
+                    return;
+                }
+                if game.game().move_count() > 0 && !game.on_checkpoint() {
+                    self.overlays.push(Overlay::Confirm(Confirm::keep_before_restart()));
+                } else {
+                    self.restart(false);
+                }
+            }
+            Question::KeepBeforeRestart => self.restart(yes),
         }
+    }
+
+    /// Restarts the open puzzle, first keeping the position as a checkpoint
+    /// if asked, then saves and returns to the game.
+    fn restart(&mut self, keep: bool) {
+        let data_dir = self.data_dir();
+        let Screen::Game(game) = &mut self.screen else { return };
+        let kept = if keep { game.keep_checkpoint() } else { None };
+        game.restart();
+        let saved = game.save(&data_dir);
+        self.overlays.clear();
+        self.message = Some(match (saved, kept) {
+            (Err(e), _) => e,
+            (Ok(()), Some(n)) => format!("Restarted; your position is kept as checkpoint {n}"),
+            (Ok(()), None) => "Restarted".into(),
+        });
     }
 
     /// Records a solve of the open puzzle and says so in the footer.
@@ -515,7 +567,7 @@ fn solved_message(score: &Score) -> String {
 fn pause_menu() -> Menu<PauseItem> {
     Menu::new(vec![
         item("Resume", None, true, PauseItem::Resume),
-        not_yet("Restart", Some('r'), PauseItem::Restart),
+        item("Restart", Some('r'), true, PauseItem::Restart),
         not_yet("Checkpoints", Some('c'), PauseItem::Checkpoints),
         not_yet("View solution", Some('s'), PauseItem::Solution),
         item("Open a puzzle", Some('o'), true, PauseItem::Open),
@@ -737,5 +789,57 @@ mod tests {
         press(&mut app, &[Key::Char('h')]);
         assert_eq!(app.context(), Context::Game);
         assert_eq!(game(&app).progress.counters.hints, 2);
+    }
+
+    #[test]
+    fn restart_asks_then_offers_to_keep_the_position() {
+        let (tmp, mut app) = app();
+        tiny(&mut app);
+        press(&mut app, &[Key::Char('s'), Key::ShiftArrow(Dir::Right), Key::Esc]);
+        assert_eq!(game(&app).game().move_count(), 1);
+
+        // No, by default: Enter on the restart question keeps playing.
+        press(&mut app, &[Key::Char('.'), Key::Char('r'), Key::Enter]);
+        assert_eq!(app.context(), Context::Pause);
+        assert_eq!(game(&app).game().move_count(), 1);
+
+        // Yes, then keep the position: it becomes checkpoint 1.
+        press(&mut app, &[Key::Char('r'), Key::Char('y'), Key::Char('y')]);
+        assert_eq!(app.context(), Context::Game);
+        let g = game(&app);
+        assert_eq!(g.game().move_count(), 0);
+        assert_eq!(g.progress.checkpoints.len(), 1);
+        assert_eq!(g.progress.checkpoints[0].number, 1);
+        assert_eq!(app.message.as_deref(), Some("Restarted; your position is kept as checkpoint 1"));
+        let code = game(&app).code.clone();
+        let puzzle = game(&app).game().puzzle().clone();
+        let saved = progress::load(&tmp.0, &code, &puzzle).unwrap().unwrap();
+        assert_eq!(saved.checkpoints.len(), 1);
+        assert_eq!(saved.game.move_count(), 0);
+
+        // With no moves there is nothing to keep: one question only.
+        press(&mut app, &[Key::Char('.'), Key::Char('r'), Key::Char('y')]);
+        assert_eq!(app.context(), Context::Game);
+        assert_eq!(app.message.as_deref(), Some("Restarted"));
+    }
+
+    #[test]
+    fn restart_resets_hints_and_does_not_keep_a_route_twice() {
+        let (_tmp, mut app) = app();
+        tiny(&mut app);
+        settle(&mut app);
+        press(&mut app, &[Key::Char('h'), Key::Char('y')]);
+        assert_eq!(game(&app).progress.counters.hints, 1);
+        press(&mut app, &[Key::Char('s'), Key::ShiftArrow(Dir::Right), Key::Esc]);
+        press(&mut app, &[Key::Char('.'), Key::Char('r'), Key::Char('y'), Key::Char('y')]);
+        assert_eq!(game(&app).progress.counters.hints, 0);
+        assert_eq!(game(&app).progress.checkpoints[0].counters.hints, 1, "the checkpoint keeps its count");
+
+        // Play the same move again: the route is already a checkpoint, so
+        // restarting asks only once.
+        press(&mut app, &[Key::Char('s'), Key::ShiftArrow(Dir::Right), Key::Esc]);
+        press(&mut app, &[Key::Char('.'), Key::Char('r'), Key::Char('y')]);
+        assert_eq!(app.context(), Context::Game);
+        assert_eq!(game(&app).progress.checkpoints.len(), 1);
     }
 }
