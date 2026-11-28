@@ -12,6 +12,7 @@ pub mod hints;
 pub mod keys;
 pub mod menu;
 pub mod play;
+pub mod prefs;
 pub mod run;
 pub mod solving;
 
@@ -76,6 +77,8 @@ pub enum Overlay {
     Help(Context),
     Pause(Menu<PauseItem>),
     Confirm(Confirm),
+    /// The preferences list, and which row is chosen.
+    Preferences(usize),
 }
 
 /// What a yes-or-no dialogue is asking about.
@@ -186,6 +189,7 @@ impl App {
             Some(Overlay::Help(_)) => Context::Help,
             Some(Overlay::Pause(_)) => Context::Pause,
             Some(Overlay::Confirm(_)) => Context::Confirm,
+            Some(Overlay::Preferences(_)) => Context::Preferences,
             None => match &self.screen {
                 Screen::Home(_) => Context::Home,
                 Screen::Open(..) => Context::List,
@@ -209,6 +213,24 @@ impl App {
                 Overlay::Help(_) => {
                     if action == Action::Back {
                         self.overlays.pop();
+                    }
+                }
+                Overlay::Preferences(row) => {
+                    let rows = prefs::rows(&self.settings);
+                    *row = (*row).min(rows.len() - 1);
+                    match action {
+                        Action::Up => *row = (*row + rows.len() - 1) % rows.len(),
+                        Action::Down => *row = (*row + 1) % rows.len(),
+                        Action::Adjust(forward) => {
+                            prefs::adjust(&mut self.settings, rows[*row], forward);
+                            if let Err(e) = self.settings.save(&self.home) {
+                                self.message = Some(e);
+                            }
+                        }
+                        Action::Back => {
+                            self.overlays.pop();
+                        }
+                        _ => {}
                     }
                 }
                 Overlay::Confirm(confirm) => {
@@ -300,6 +322,7 @@ impl App {
                     Ok(()) if self.settings.confirm_hints => self.overlays.push(Overlay::Confirm(Confirm::hint())),
                     Ok(()) => game.give_hint(Instant::now()),
                 },
+                Action::Preferences => self.overlays.push(Overlay::Preferences(0)),
                 Action::ToggleGoal => {
                     self.settings.show_goal = !self.settings.show_goal;
                     if let Err(e) = self.settings.save(&self.home) {
@@ -648,7 +671,7 @@ mod tests {
         press(&mut app, &[Key::Char('.'), Key::Esc]);
         assert_eq!(app.context(), Context::Game);
         // Disabled pause items do nothing.
-        press(&mut app, &[Key::Char('.'), Key::Char('r')]);
+        press(&mut app, &[Key::Char('.'), Key::Char('c')]);
         assert_eq!(app.context(), Context::Pause);
     }
 
@@ -841,5 +864,23 @@ mod tests {
         press(&mut app, &[Key::Char('.'), Key::Char('r'), Key::Char('y')]);
         assert_eq!(app.context(), Context::Game);
         assert_eq!(game(&app).progress.checkpoints.len(), 1);
+    }
+
+    #[test]
+    fn preferences_change_live_and_are_saved() {
+        let (tmp, mut app) = app();
+        tiny(&mut app);
+        press(&mut app, &[Key::Char(',')]);
+        assert_eq!(app.context(), Context::Preferences);
+        // Theme is the first row: right moves to the next theme.
+        press(&mut app, &[Key::Arrow(Dir::Right)]);
+        assert_eq!(app.settings.theme, "escape-light");
+        // Down to grain (escape-light has texture) and again to the goal.
+        press(&mut app, &[Key::Arrow(Dir::Down), Key::Arrow(Dir::Down), Key::Enter]);
+        assert!(app.settings.show_goal);
+        let saved = Settings::load(&Home::at(&tmp.0)).unwrap();
+        assert_eq!((saved.theme.as_str(), saved.show_goal), ("escape-light", true));
+        press(&mut app, &[Key::Char(',')]);
+        assert_eq!(app.context(), Context::Game);
     }
 }

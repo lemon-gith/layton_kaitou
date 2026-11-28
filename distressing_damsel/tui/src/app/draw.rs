@@ -78,6 +78,7 @@ impl App {
                     draw_box(frame, main, " Paused ", lines, &chrome);
                 }
                 Overlay::Confirm(confirm) => draw_confirm(frame, main, confirm, &chrome),
+                Overlay::Preferences(row) => draw_preferences(frame, main, *row, &self.settings, &chrome),
             }
         }
         draw_footer(frame, footer, self, &chrome);
@@ -160,9 +161,19 @@ fn draw_placeholder(frame: &mut Frame, area: Rect, title: &str, note: &str, chro
 
 /// A bordered box in the middle of `area`, over whatever is there.
 fn draw_box(frame: &mut Frame, area: Rect, title: &str, lines: Vec<Line>, chrome: &Chrome) {
+    draw_box_placed(frame, area, title, lines, chrome, false);
+}
+
+/// A bordered box over whatever is there: in the middle of `area`, or with
+/// `at_right`, against its right-hand side so what is on the left (the
+/// board) stays in view.
+fn draw_box_placed(frame: &mut Frame, area: Rect, title: &str, lines: Vec<Line>, chrome: &Chrome, at_right: bool) {
     let width = lines.iter().map(|l| l.width()).max().unwrap_or(0) as u16 + 6;
     let height = lines.len() as u16 + 2;
-    let rect = centred(area, width.max(title.chars().count() as u16 + 4), height);
+    let mut rect = centred(area, width.max(title.chars().count() as u16 + 4), height);
+    if at_right {
+        rect.x = area.x + area.width.saturating_sub(rect.width + 1);
+    }
     frame.render_widget(Clear, rect);
     let block = Block::bordered()
         .title(Span::styled(title.to_string(), chrome.title()))
@@ -172,6 +183,29 @@ fn draw_box(frame: &mut Frame, area: Rect, title: &str, lines: Vec<Line>, chrome
     frame.render_widget(block, rect);
     let inner = Rect::new(inner.x + 1, inner.y, inner.width.saturating_sub(2), inner.height);
     frame.render_widget(Paragraph::new(lines).style(chrome.text()), inner);
+}
+
+/// The preferences list: each setting and its value, the chosen row's
+/// value between arrows.
+fn draw_preferences(frame: &mut Frame, area: Rect, row: usize, settings: &crate::settings::Settings, chrome: &Chrome) {
+    use super::prefs;
+    let rows = prefs::rows(settings);
+    let row = row.min(rows.len() - 1);
+    let lines = rows
+        .iter()
+        .enumerate()
+        .map(|(i, &pref)| {
+            let chosen = i == row;
+            let value = prefs::value(settings, pref);
+            let style = if chosen { chrome.selected() } else { chrome.text() };
+            Line::from(vec![
+                Span::styled(if chosen { "▸ " } else { "  " }, style),
+                Span::styled(format!("{:<16}", prefs::name(pref)), style),
+                Span::styled(if chosen { format!("◂ {value} ▸") } else { format!("  {value}") }, style),
+            ])
+        })
+        .collect();
+    draw_box_placed(frame, area, " Preferences ", lines, chrome, true);
 }
 
 /// A yes-or-no dialogue: the question, the "don't ask again" box where it
