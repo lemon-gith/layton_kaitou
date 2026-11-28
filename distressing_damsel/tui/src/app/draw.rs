@@ -57,6 +57,7 @@ impl App {
     pub fn draw(&self, frame: &mut Frame) {
         let chrome = Chrome::new(self.settings.theme());
         let area = frame.area();
+        self.size.set((area.width, area.height));
         frame.render_widget(Block::new().style(chrome.text()), area);
         let main = Rect::new(area.x + 1, area.y, area.width.saturating_sub(2), area.height.saturating_sub(1));
         let footer = Rect::new(area.x + 1, area.y + area.height.saturating_sub(1), area.width.saturating_sub(2), 1);
@@ -70,6 +71,17 @@ impl App {
             }
             Screen::Placeholder { title, note } => draw_placeholder(frame, main, title, note, &chrome),
         }
+        // The picture view shows the screen as it will be saved: no other
+        // overlays, a bar of its own, and for PNG all but the board dimmed.
+        if let Some(Overlay::Picture { png }) = self.overlays.last() {
+            if let (true, Screen::Game(game)) = (*png, &self.screen) {
+                let inner = Rect::new(main.x + 1, main.y + 1, main.width.saturating_sub(2), main.height.saturating_sub(1));
+                let board = game.arrange(&self.settings, inner).board;
+                dim_outside(frame, main, board, &chrome);
+            }
+            draw_picture_bar(frame, footer, *png, &self.settings, &chrome);
+            return;
+        }
         for overlay in &self.overlays {
             match overlay {
                 Overlay::Help(context) => draw_help(frame, main, *context, &chrome),
@@ -79,6 +91,7 @@ impl App {
                 }
                 Overlay::Confirm(confirm) => draw_confirm(frame, main, confirm, &chrome),
                 Overlay::Preferences(row) => draw_preferences(frame, main, *row, &self.settings, &chrome),
+                Overlay::Picture { .. } => {}
                 Overlay::Summary(summary) => {
                     let shortest = match &self.screen {
                         Screen::Game(game) => game.solver.shortest(),
@@ -190,6 +203,46 @@ fn draw_box_placed(frame: &mut Frame, area: Rect, title: &str, lines: Vec<Line>,
     frame.render_widget(block, rect);
     let inner = Rect::new(inner.x + 1, inner.y, inner.width.saturating_sub(2), inner.height);
     frame.render_widget(Paragraph::new(lines).style(chrome.text()), inner);
+}
+
+/// Fades every cell in `area` outside `keep` towards the background.
+fn dim_outside(frame: &mut Frame, area: Rect, keep: Rect, chrome: &Chrome) {
+    use ratatui::style::Color;
+    let fade = |c: Color| match c {
+        Color::Rgb(r, g, b) => {
+            let m = crate::look::Rgb(r, g, b).mix(chrome.background, 0.65);
+            Color::Rgb(m.0, m.1, m.2)
+        }
+        other => other,
+    };
+    let buf = frame.buffer_mut();
+    for y in area.y..area.y + area.height {
+        for x in area.x..area.x + area.width {
+            if keep.contains(ratatui::layout::Position { x, y }) {
+                continue;
+            }
+            if let Some(cell) = buf.cell_mut((x, y)) {
+                let (fg, bg) = (fade(cell.fg), fade(cell.bg));
+                cell.set_fg(fg).set_bg(bg);
+            }
+        }
+    }
+}
+
+/// The picture view's bar: the format, its keys, and for ANSI a note on
+/// how best to look at the file.
+fn draw_picture_bar(frame: &mut Frame, area: Rect, png: bool, settings: &crate::settings::Settings, chrome: &Chrome) {
+    let (format, other) = if png { ("PNG picture", "ANSI") } else { ("ANSI picture", "PNG") };
+    let mut spans = vec![Span::styled(format, chrome.selected())];
+    for (key, what) in [("enter", "save".to_string()), ("a", other.to_string()), ("j", "labels on/off".into()), ("esc", "back".into())] {
+        spans.push(Span::styled(" · ", chrome.dim()));
+        spans.push(Span::styled(key, chrome.text()));
+        spans.push(Span::styled(format!(" {what}"), chrome.dim()));
+    }
+    if !png && settings.picture_format != crate::settings::PictureFormat::Ansi {
+        spans.push(Span::styled(" · cat the file in a terminal for best results", chrome.dim()));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)).style(chrome.text()), area);
 }
 
 /// The summary after a solve: how it went, and what can be done next.

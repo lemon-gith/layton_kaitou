@@ -53,6 +53,9 @@ pub struct GameScreen {
     pub hint_search: Option<HintSearch>,
     /// The player's solution being played back.
     pub replay: Option<Replay>,
+    /// The picture view is open: whether the picture has labels. The board
+    /// is drawn as it will be saved, without cursor or hint.
+    pub picture: Option<bool>,
     /// The last painted board, reused until something it shows changes.
     cache: RefCell<Option<(CacheKey, Canvas)>>,
 }
@@ -113,6 +116,7 @@ impl GameScreen {
             hint: None,
             hint_search: None,
             replay: None,
+            picture: None,
             cache: RefCell::new(None),
         };
         Ok((screen, warning))
@@ -194,7 +198,26 @@ impl GameScreen {
         }
     }
 
+    fn all_labels(&self) -> HashMap<usize, String> {
+        self.game().puzzle().blocks.iter().enumerate().map(|(i, b)| (i, b.label.to_string())).collect()
+    }
+
+    /// The board as a PNG picture: the position as it stands, labelled or
+    /// not, at the preferred scale.
+    pub fn picture_png(&self, settings: &Settings, labels: bool) -> Result<Vec<u8>, String> {
+        let options = PaintOptions {
+            labels: if labels { self.all_labels() } else { HashMap::new() },
+            ..settings.paint_options()
+        };
+        let hidden = if self.exited { exiting_block(self.game()) } else { None };
+        crate::look::picture::png(&crate::look::paint::paint_picture(self.game(), settings.theme(), &options, hidden))
+    }
+
     fn paint_options(&self, settings: &Settings, scale: usize, now: Instant) -> PaintOptions {
+        if let Some(labels) = self.picture {
+            let labels = if labels { self.all_labels() } else { HashMap::new() };
+            return PaintOptions { scale, labels, ..settings.paint_options() };
+        }
         let labels = if self.labels_shown(settings) {
             self.game().puzzle().blocks.iter().enumerate().map(|(i, b)| (i, b.label.to_string())).collect()
         } else {

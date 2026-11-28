@@ -58,6 +58,10 @@ pub enum Action {
     Replay,
     /// Leave this puzzle for the Open screen.
     OpenAnother,
+    // The picture view.
+    Save,
+    SwitchFormat,
+    ToggleLabels,
     // Dialogues.
     Yes,
     No,
@@ -109,6 +113,8 @@ pub enum Context {
     Summary,
     /// The player's solution playing back.
     Replay,
+    /// About to save a picture.
+    Picture,
 }
 
 pub fn table(context: Context) -> &'static [Binding] {
@@ -126,6 +132,7 @@ pub fn table(context: Context) -> &'static [Binding] {
         Context::Preferences => PREFERENCES,
         Context::Summary => SUMMARY,
         Context::Replay => REPLAY,
+        Context::Picture => PICTURE,
     }
 }
 
@@ -218,6 +225,13 @@ const SUMMARY: &[Binding] = &[
 
 const REPLAY: &[Binding] = &[bind(&[Key::Esc, Key::Char('p'), Key::Char(' ')], "esc", "stop the replay", Action::Back, true)];
 
+const PICTURE: &[Binding] = &[
+    bind(&[Key::Enter], "enter", "save", Action::Save, true),
+    bind(&[Key::Char('a')], "a", "switch format", Action::SwitchFormat, true),
+    bind(&[Key::Char('j')], "j", "labels on/off", Action::ToggleLabels, true),
+    bind(&[Key::Esc], "esc", "back", Action::Back, true),
+];
+
 const HELP: &[Binding] = &[bind(&[Key::Esc, Key::Char('?'), Key::Enter], "esc", "close", Action::Back, true)];
 
 /// The action `key` triggers in `context`, if any. Letters not bound
@@ -261,6 +275,7 @@ mod tests {
             Context::Preferences,
             Context::Summary,
             Context::Replay,
+            Context::Picture,
         ] {
             let keys: Vec<Key> = table(context).iter().flat_map(|b| b.keys.iter().copied()).collect();
             for (i, k) in keys.iter().enumerate() {

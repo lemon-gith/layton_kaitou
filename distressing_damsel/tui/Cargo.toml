@@ -10,8 +10,10 @@ name = "dd"
 path = "src/main.rs"
 
 [dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 dd_engine = { path = "../engine" }
 dd_solver = { path = "../solver" }
+png = "0.18"
 ratatui = "0.30"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"

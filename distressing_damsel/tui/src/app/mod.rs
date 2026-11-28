@@ -52,6 +52,7 @@ pub enum PauseItem {
     Restart,
     Checkpoints,
     Solution,
+    Picture,
     Open,
     New,
     Quit,
@@ -82,6 +83,8 @@ pub enum Overlay {
     Preferences(usize),
     /// After a solve.
     Summary(Summary),
+    /// About to save a picture: PNG (true) or ANSI.
+    Picture { png: bool },
 }
 
 /// What the summary after a solve shows. The shortest length is read from
@@ -158,6 +161,8 @@ pub struct App {
     /// kept to show again after a replay.
     pub summary: Option<Summary>,
     summary_waiting: bool,
+    /// The size of the last frame drawn, for ANSI pictures of the screen.
+    pub size: std::cell::Cell<(u16, u16)>,
 }
 
 impl App {
@@ -177,6 +182,7 @@ impl App {
             message,
             summary: None,
             summary_waiting: false,
+            size: std::cell::Cell::new((100, 32)),
         };
         app.go_home();
         Ok(app)
@@ -226,6 +232,7 @@ impl App {
             Some(Overlay::Confirm(_)) => Context::Confirm,
             Some(Overlay::Preferences(_)) => Context::Preferences,
             Some(Overlay::Summary(_)) => Context::Summary,
+            Some(Overlay::Picture { .. }) => Context::Picture,
             None => match &self.screen {
                 Screen::Home(_) => Context::Home,
                 Screen::Open(..) => Context::List,
@@ -251,6 +258,25 @@ impl App {
                         self.overlays.pop();
                     }
                 }
+                Overlay::Picture { png } => match action {
+                    Action::SwitchFormat => *png = !*png,
+                    Action::ToggleLabels => {
+                        if let Screen::Game(game) = &mut self.screen {
+                            game.picture = game.picture.map(|on| !on);
+                        }
+                    }
+                    Action::Save => {
+                        let png = *png;
+                        self.save_picture(png);
+                    }
+                    Action::Back => {
+                        self.overlays.pop();
+                        if let Screen::Game(game) = &mut self.screen {
+                            game.picture = None;
+                        }
+                    }
+                    _ => {}
+                },
                 Overlay::Summary(_) => match action {
                     Action::Back => {
                         self.overlays.pop();
@@ -436,6 +462,13 @@ impl App {
                 self.go_home();
             }
             PauseItem::Restart => self.overlays.push(Overlay::Confirm(Confirm::restart())),
+            PauseItem::Picture => {
+                if let Screen::Game(game) = &mut self.screen {
+                    game.picture = Some(self.settings.labels == crate::settings::Labels::Always);
+                    let png = self.settings.picture_format == crate::settings::PictureFormat::Png;
+                    self.overlays.push(Overlay::Picture { png });
+                }
+            }
             // Not built yet; the menu shows them disabled.
             PauseItem::Checkpoints | PauseItem::Solution => {}
         }
@@ -589,6 +622,63 @@ impl App {
         }
     }
 
+    /// Saves a picture of the open puzzle to `pictures/` in the data
+    /// folder: the board as PNG, or the screen as ANSI text at the size it
+    /// was last drawn. Returns to the game and says where it went.
+    fn save_picture(&mut self, png: bool) {
+        let Screen::Game(game) = &self.screen else { return };
+        let labels = game.picture.unwrap_or(false);
+        let slug: String = game
+            .title()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
+            .collect::<String>()
+            .split('_')
+            .filter(|w| !w.is_empty())
+            .collect::<Vec<_>>()
+            .join("_");
+        let stamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+        let ext = if png { "png" } else { "ans" };
+        let dir = self.data_dir().join("pictures");
+        let path = (1..)
+            .map(|n| match n {
+                1 => dir.join(format!("{slug}_{stamp}.{ext}")),
+                n => dir.join(format!("{slug}_{stamp}_{n}.{ext}")),
+            })
+            .find(|p| !p.exists())
+            .expect("a free name");
+        let bytes = if png {
+            game.picture_png(&self.settings, labels)
+        } else {
+            // The screen as it is behind the picture view.
+            let overlays = std::mem::take(&mut self.overlays);
+            let (w, h) = self.size.get();
+            let text = run::snapshot(self, w, h);
+            self.overlays = overlays;
+            Ok(text.into_bytes())
+        };
+        let written = bytes.and_then(|b| {
+            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            std::fs::write(&path, b).map_err(|e| format!("{}: {e}", path.display()))
+        });
+        self.overlays.clear();
+        if let Screen::Game(game) = &mut self.screen {
+            game.picture = None;
+        }
+        self.message = Some(match written {
+            Ok(()) => format!("Saved picture: {}", path.display()),
+            Err(e) => format!("Could not save the picture: {e}"),
+        });
+    }
+
+    /// The open puzzle's board as a PNG, for `dd snapshot --png`.
+    pub fn board_png(&self, labels: bool) -> Result<Vec<u8>, String> {
+        match &self.screen {
+            Screen::Game(game) => game.picture_png(&self.settings, labels),
+            _ => Err("no puzzle is open".into()),
+        }
+    }
+
     /// Restarts the open puzzle, first keeping the position as a checkpoint
     /// if asked, then saves and returns to the game.
     fn restart(&mut self, keep: bool) {
@@ -657,6 +747,7 @@ fn pause_menu() -> Menu<PauseItem> {
         item("Restart", Some('r'), true, PauseItem::Restart),
         not_yet("Checkpoints", Some('c'), PauseItem::Checkpoints),
         not_yet("View solution", Some('s'), PauseItem::Solution),
+        item("Save picture", Some('p'), true, PauseItem::Picture),
         item("Open a puzzle", Some('o'), true, PauseItem::Open),
         item("New puzzle", Some('n'), true, PauseItem::New),
         item("Quit to home", Some('q'), true, PauseItem::Quit),
@@ -1005,5 +1096,57 @@ mod tests {
         run_until(&mut app, |a| !a.animating());
         assert_eq!(app.context(), Context::Game);
         assert!(app.summary.is_none());
+    }
+
+    #[test]
+    fn pictures_save_as_png_or_ansi_and_say_where() {
+        let (tmp, mut app) = app();
+        tiny(&mut app);
+        press(&mut app, &[Key::Char('.'), Key::Char('p')]);
+        assert_eq!(app.context(), Context::Picture);
+        assert_eq!(game(&app).picture, Some(false), "labels start off unless always shown");
+        press(&mut app, &[Key::Char('j')]);
+        assert_eq!(game(&app).picture, Some(true));
+        press(&mut app, &[Key::Enter]);
+        assert_eq!(app.context(), Context::Game);
+        assert!(game(&app).picture.is_none());
+        let message = app.message.clone().unwrap();
+        let path = message.strip_prefix("Saved picture: ").expect(&message);
+        assert!(path.ends_with(".png"));
+        let name = std::path::Path::new(path).file_name().unwrap().to_string_lossy().into_owned();
+        // tiny_YYYYMMDD_HHmmss.png
+        assert!(name.starts_with("tiny_") && name.len() == "tiny_20261128_153205.png".len(), "{name}");
+        let bytes = std::fs::read(path).unwrap();
+        assert_eq!(&bytes[1..4], b"PNG");
+        assert!(path.starts_with(&tmp.0.join("pictures").to_string_lossy().into_owned()));
+
+        // a switches to ANSI: the whole screen as colour text.
+        press(&mut app, &[Key::Char('.'), Key::Char('p'), Key::Char('a'), Key::Enter]);
+        let message = app.message.clone().unwrap();
+        let path = message.strip_prefix("Saved picture: ").expect(&message);
+        assert!(path.ends_with(".ans"));
+        let text = std::fs::read_to_string(path).unwrap();
+        let plain: String = text.split('\x1b').map(|p| p.split_once('m').map_or(p, |(_, rest)| rest)).collect();
+        assert!(text.contains("\x1b[") && plain.contains("Tiny"));
+
+        // Esc backs out to the pause menu without saving.
+        press(&mut app, &[Key::Char('.'), Key::Char('p'), Key::Esc]);
+        assert_eq!(app.context(), Context::Pause);
+        assert_eq!(std::fs::read_dir(tmp.0.join("pictures")).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn the_picture_view_bar_and_ansi_note() {
+        let (_tmp, mut app) = app();
+        tiny(&mut app);
+        press(&mut app, &[Key::Char('.'), Key::Char('p')]);
+        let text = run::snapshot(&app, 100, 24);
+        let plain: String = text.split('\x1b').map(|p| p.split_once('m').map_or(p, |(_, rest)| rest)).collect();
+        assert!(plain.contains("PNG picture") && plain.contains("a ANSI"), "{plain}");
+        assert!(!plain.contains("Paused"), "the pause box is hidden in the picture view");
+        press(&mut app, &[Key::Char('a')]);
+        let text = run::snapshot(&app, 120, 24);
+        let plain: String = text.split('\x1b').map(|p| p.split_once('m').map_or(p, |(_, rest)| rest)).collect();
+        assert!(plain.contains("ANSI picture") && plain.contains("cat the file"), "{plain}");
     }
 }

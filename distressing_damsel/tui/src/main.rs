@@ -30,11 +30,20 @@ usage: dd [command]
   code <puzzle>            print the puzzle's share code
   export <puzzle>          print the puzzle as a file
   preview <puzzle> [opts]  draw the puzzle in colour (needs a 24-bit terminal)
+  snapshot [puzzle] [opts] a picture of the game screen, with your saved
+                           progress on the puzzle, as colour text (cat it in
+                           a 24-bit terminal) or as a PNG of the board
 
   settings [init]          show your settings and where they live, or
                            write a settings file with the defaults
   settings move-data <dir> copy puzzles, progress and records to <dir> and
                            use it from now on (nothing is deleted)
+
+snapshot options:
+  --png <file>        save the board as a PNG image instead
+  --labels            with --png, write each block's label on it
+  --size <WxH>        screen size for the text picture (default 100x32)
+  --keys <a,b,c>      press these keys first (up, S-left, enter, esc, space, …)
 
 preview options (defaults come from your settings):
   --theme <name|all>  dark, light, escape-dark, escape-light, liberation,
@@ -479,6 +488,8 @@ fn snapshot(args: &[String], out: &mut String) -> Result<(), String> {
     let (mut width, mut height) = (100u16, 32u16);
     let mut keys = Vec::new();
     let mut puzzle = None;
+    let mut png: Option<String> = None;
+    let mut labels = false;
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -492,6 +503,8 @@ fn snapshot(args: &[String], out: &mut String) -> Result<(), String> {
                     keys.push(app::run::key_named(name).ok_or(format!("unknown key {name:?}"))?);
                 }
             }
+            "--png" => png = Some(args.next().ok_or("--png needs a file name")?.clone()),
+            "--labels" => labels = true,
             other => puzzle = Some(other.to_string()),
         }
     }
@@ -525,6 +538,12 @@ fn snapshot(args: &[String], out: &mut String) -> Result<(), String> {
     let later = Instant::now() + std::time::Duration::from_secs(60);
     app.tick(later);
     app.tick(later + std::time::Duration::from_secs(60));
+    if let Some(file) = png {
+        let bytes = app.board_png(labels)?;
+        std::fs::write(&file, bytes).map_err(|e| format!("{file}: {e}"))?;
+        say!(out, "wrote {file}");
+        return Ok(());
+    }
     put!(out, "{}", app::run::snapshot(&app, width, height));
     Ok(())
 }

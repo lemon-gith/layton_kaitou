@@ -10,6 +10,7 @@
 #![allow(dead_code, unused_imports)]
 
 pub mod paint;
+pub mod picture;
 pub mod theme;
 
 pub use paint::{

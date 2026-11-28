@@ -23,6 +23,17 @@ pub enum Labels {
 /// designed; past 1.5 times the patterns start to break up.
 pub const GRAIN_LEVELS: [f32; 4] = [0.0, 0.5, 1.0, 1.5];
 
+/// The format the picture view starts in.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PictureFormat {
+    /// An image of the board.
+    #[default]
+    Png,
+    /// The whole screen as text with colour codes, for a terminal.
+    Ansi,
+}
+
 /// Which best result the side panel shows.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -63,6 +74,8 @@ pub struct Settings {
     /// Mark the cells a grabbed block can reach.
     pub mark_reachable: bool,
     pub best: BestShown,
+    /// The format the picture view starts in.
+    pub picture_format: PictureFormat,
     /// Where puzzles, progress and records live. A relative path counts
     /// from the data folder; unset means the data folder itself.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -83,6 +96,7 @@ impl Default for Settings {
             show_solver_length: false,
             mark_reachable: false,
             best: BestShown::Overall,
+            picture_format: PictureFormat::Png,
             data_dir: None,
         }
     }
@@ -171,6 +185,7 @@ mod tests {
             show_solver_length: true,
             mark_reachable: true,
             best: BestShown::NoHintsFirst,
+            picture_format: PictureFormat::Ansi,
             data_dir: Some("../elsewhere".into()),
         };
         assert_eq!(Settings::parse(&custom.to_toml()).unwrap(), custom);

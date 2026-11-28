@@ -544,6 +544,40 @@ pub fn canvas_size(game: &Game, theme: &Theme, scale: usize) -> (usize, usize) {
     (fs + 1 + layout.width() as usize * s + fs, (ft + 1 + layout.height() as usize * s + fb) / 2)
 }
 
+/// A painted board as pixels, with where its labels go: for saving as an
+/// image.
+pub struct Picture {
+    pub width: usize,
+    pub height: usize,
+    pub pixels: Vec<Rgb>,
+    pub labels: Vec<PictureLabel>,
+}
+
+/// A label at a character position: `x` across, `row` down, two pixels a
+/// row.
+pub struct PictureLabel {
+    pub x: usize,
+    pub row: usize,
+    pub text: String,
+    pub fg: Rgb,
+}
+
+/// Paints the board for a picture, with `hidden` left out (a key block
+/// that has left the box).
+pub fn paint_picture(game: &Game, theme: &Theme, options: &PaintOptions, hidden: Option<usize>) -> Picture {
+    let image = paint_image(game, theme, options, hidden);
+    let labels = labels_for(&image, &options.labels, hidden)
+        .into_iter()
+        .map(|l| {
+            let w = image.width;
+            let bg = image.pixels[l.row * 2 * w + l.x].mix(image.pixels[(l.row * 2 + 1) * w + l.x], 0.5);
+            let fg = if bg.luma() > 0.62 { theme.text_on_light } else { theme.text };
+            PictureLabel { x: l.x, row: l.row, text: l.text.to_string(), fg }
+        })
+        .collect();
+    Picture { width: image.width, height: image.height, pixels: image.pixels, labels }
+}
+
 pub fn paint(game: &Game, theme: &Theme, options: &PaintOptions) -> Canvas {
     let image = paint_image(game, theme, options, None);
     let labels = labels_for(&image, &options.labels, None);

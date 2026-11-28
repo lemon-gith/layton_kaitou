@@ -49,8 +49,24 @@ cargo run --release -- solve path/to/puzzle.toml --boards
   the block to move pulses and a faint copy shows where it should go. Hints
   count towards your attempt, so you are asked first unless you tick
   "don't ask again".
+- `,` opens preferences (theme, grain, goal outline, grid, labels and more);
+  changes apply as you make them.
 - Esc steps back a mode, `?` lists the keys for the mode you are in, and
-  `.` opens the pause menu.
+  `.` opens the pause menu: restart (offering to keep your position as a
+  checkpoint), save a picture, open another puzzle or quit to the home
+  screen.
+
+When you solve a puzzle, a summary shows your moves against the shortest
+possible; from there `p` replays your solution.
+
+### Pictures
+
+`p` in the pause menu saves a picture to `pictures/` in your data folder,
+named like `klotski_20261128_153205.png`. PNG (the default) is an image of
+the board; `a` switches to ANSI, the whole screen as colour text to `cat`
+in a terminal. `j` turns block labels on or off for the picture. From the
+command line, `dd snapshot <puzzle> --png board.png` does the same for
+your saved position on that puzzle; `dd help` lists its options.
 
 Progress saves when you leave a puzzle, and Continue on the home screen
 returns you to it.
@@ -114,6 +130,7 @@ confirm_hints = true         # ask before giving a hint
 show_solver_length = false   # show the shortest solution's length while playing
 mark_reachable = false       # mark where a grabbed block can go
 best = "overall"             # or "no-hints-first"
+picture_format = "png"       # or "ansi": the picture view's starting format
 # data_dir = "../somewhere"  # where puzzles, progress and records live
 ```
 
