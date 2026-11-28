@@ -37,7 +37,7 @@ pub enum Event {
 
 /// The route a block took to reach `now` from `came_from`, with everything
 /// else where it is now.
-fn path_into(game: &Game, now: Cell, came_from: Cell) -> Vec<Dir> {
+pub(super) fn path_into(game: &Game, now: Cell, came_from: Cell) -> Vec<Dir> {
     let mut path = game.layout().drag_path(game.position(), now, came_from).unwrap_or_default();
     path.reverse();
     path.iter().map(|d| d.opposite()).collect()
@@ -45,6 +45,9 @@ fn path_into(game: &Game, now: Cell, came_from: Cell) -> Vec<Dir> {
 
 impl GameScreen {
     pub fn context(&self) -> Context {
+        if self.replay.is_some() {
+            return Context::Replay;
+        }
         match self.mode {
             Mode::Base => Context::Game,
             Mode::Select { .. } => Context::Select,
@@ -274,6 +277,9 @@ impl GameScreen {
 
     /// Moves on from a finished slide to a waiting exit animation.
     pub fn advance(&mut self, now: Instant) {
+        if let Some(replay) = &mut self.replay {
+            replay.advance(now);
+        }
         self.tick(now);
         if self.animation.is_none() {
             if let Some(exit) = self.pending_exit.take() {

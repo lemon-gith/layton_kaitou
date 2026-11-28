@@ -79,6 +79,13 @@ impl App {
                 }
                 Overlay::Confirm(confirm) => draw_confirm(frame, main, confirm, &chrome),
                 Overlay::Preferences(row) => draw_preferences(frame, main, *row, &self.settings, &chrome),
+                Overlay::Summary(summary) => {
+                    let shortest = match &self.screen {
+                        Screen::Game(game) => game.solver.shortest(),
+                        _ => None,
+                    };
+                    draw_summary(frame, main, summary, shortest, &chrome);
+                }
             }
         }
         draw_footer(frame, footer, self, &chrome);
@@ -183,6 +190,38 @@ fn draw_box_placed(frame: &mut Frame, area: Rect, title: &str, lines: Vec<Line>,
     frame.render_widget(block, rect);
     let inner = Rect::new(inner.x + 1, inner.y, inner.width.saturating_sub(2), inner.height);
     frame.render_widget(Paragraph::new(lines).style(chrome.text()), inner);
+}
+
+/// The summary after a solve: how it went, and what can be done next.
+fn draw_summary(frame: &mut Frame, area: Rect, summary: &super::Summary, shortest: Option<u32>, chrome: &Chrome) {
+    let score = summary.score;
+    let row = |name: &str, value: String| {
+        Line::from(vec![Span::styled(format!("{name:<12}"), chrome.dim()), Span::styled(value, chrome.text())])
+    };
+    let mut lines = vec![
+        row("moves", score.moves.to_string()),
+        row("shortest", shortest.map_or("—".into(), |n| n.to_string())),
+        row("hints", score.hints.to_string()),
+    ];
+    if score.solution_viewed {
+        lines.push(row("solution", "viewed".into()));
+    }
+    if summary.new_best {
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled("New best!", chrome.selected())));
+    }
+    lines.push(Line::default());
+    let key = |k: &str, what: &str, live: bool| {
+        Line::from(vec![
+            Span::styled(format!("{k:<4}"), if live { chrome.selected() } else { chrome.dim() }),
+            Span::styled(what.to_string(), if live { chrome.text() } else { chrome.dim() }),
+        ])
+    };
+    lines.push(key("v", "look at the board", true));
+    lines.push(key("p", "replay your solution", true));
+    lines.push(key("s", "view the solution (not yet)", false));
+    lines.push(key("o", "open another puzzle", true));
+    draw_box(frame, area, " Solved! ", lines, chrome);
 }
 
 /// The preferences list: each setting and its value, the chosen row's

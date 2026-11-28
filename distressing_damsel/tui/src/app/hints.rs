@@ -127,6 +127,7 @@ impl GameScreen {
     pub fn busy(&self, now: Instant) -> bool {
         matches!(self.solver, SolverState::Running(_))
             || self.hint_search.is_some()
+            || self.replay.is_some()
             || self.hint.is_some_and(|h| now.saturating_duration_since(h.started).as_millis() < PULSE_MILLIS as u128)
     }
 

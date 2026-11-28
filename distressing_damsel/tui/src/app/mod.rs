@@ -13,6 +13,7 @@ pub mod keys;
 pub mod menu;
 pub mod play;
 pub mod prefs;
+pub mod replay;
 pub mod run;
 pub mod solving;
 
@@ -79,6 +80,16 @@ pub enum Overlay {
     Confirm(Confirm),
     /// The preferences list, and which row is chosen.
     Preferences(usize),
+    /// After a solve.
+    Summary(Summary),
+}
+
+/// What the summary after a solve shows. The shortest length is read from
+/// the solver when drawn, as it may still be working.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct Summary {
+    pub score: Score,
+    pub new_best: bool,
 }
 
 /// What a yes-or-no dialogue is asking about.
@@ -143,6 +154,10 @@ pub struct App {
     pub overlays: Vec<Overlay>,
     /// Shown in the footer until the next key.
     pub message: Option<String>,
+    /// The summary of the last solve: waiting for the exit to finish, and
+    /// kept to show again after a replay.
+    pub summary: Option<Summary>,
+    summary_waiting: bool,
 }
 
 impl App {
@@ -153,7 +168,16 @@ impl App {
             Ok(records) => (records, None),
             Err(e) => (Records::default(), Some(format!("could not read your records: {e}"))),
         };
-        let mut app = App { home, settings, records, screen: Screen::Placeholder { title: "", note: "" }, overlays: Vec::new(), message };
+        let mut app = App {
+            home,
+            settings,
+            records,
+            screen: Screen::Placeholder { title: "", note: "" },
+            overlays: Vec::new(),
+            message,
+            summary: None,
+            summary_waiting: false,
+        };
         app.go_home();
         Ok(app)
     }
@@ -175,11 +199,22 @@ impl App {
             if matches!(g.solver, hints::SolverState::Running(_)) || g.hint_search.is_some())
     }
 
-    /// Moves animations on to `now` and collects finished searches.
+    /// Moves animations on to `now`, collects finished searches, and shows
+    /// the summary once a solve's exit or a replay has finished.
     pub fn tick(&mut self, now: Instant) {
-        if let Screen::Game(game) = &mut self.screen {
-            game.advance(now);
-            game.poll_solver(now);
+        let Screen::Game(game) = &mut self.screen else { return };
+        game.advance(now);
+        game.poll_solver(now);
+        if game.replay.as_ref().is_some_and(|r| r.finished) {
+            game.replay = None;
+            self.summary_waiting = true;
+        }
+        let settled = !game.animating() && game.pending_exit.is_none() && game.replay.is_none();
+        if self.summary_waiting && settled && self.overlays.is_empty() {
+            if let Some(summary) = self.summary {
+                self.overlays.push(Overlay::Summary(summary));
+            }
+            self.summary_waiting = false;
         }
     }
 
@@ -190,6 +225,7 @@ impl App {
             Some(Overlay::Pause(_)) => Context::Pause,
             Some(Overlay::Confirm(_)) => Context::Confirm,
             Some(Overlay::Preferences(_)) => Context::Preferences,
+            Some(Overlay::Summary(_)) => Context::Summary,
             None => match &self.screen {
                 Screen::Home(_) => Context::Home,
                 Screen::Open(..) => Context::List,
@@ -215,6 +251,22 @@ impl App {
                         self.overlays.pop();
                     }
                 }
+                Overlay::Summary(_) => match action {
+                    Action::Back => {
+                        self.overlays.pop();
+                    }
+                    Action::Replay => {
+                        self.overlays.pop();
+                        if let Screen::Game(game) = &mut self.screen {
+                            game.start_replay(Instant::now(), self.settings.animations);
+                        }
+                    }
+                    Action::OpenAnother => {
+                        self.leave_game();
+                        self.go_open();
+                    }
+                    _ => {}
+                },
                 Overlay::Preferences(row) => {
                     let rows = prefs::rows(&self.settings);
                     *row = (*row).min(rows.len() - 1);
@@ -308,6 +360,12 @@ impl App {
                 }
                 _ => {}
             },
+            Screen::Game(game) if game.replay.is_some() => {
+                if action == Action::Back {
+                    game.replay = None;
+                    self.summary_waiting = true;
+                }
+            }
             Screen::Game(game) => match action {
                 Action::Help => {
                     let context = game.context();
@@ -487,6 +545,8 @@ impl App {
         match GameScreen::open(spec, source, &self.data_dir()) {
             Ok((game, warning)) => {
                 self.overlays.clear();
+                self.summary = None;
+                self.summary_waiting = false;
                 let last = LastPuzzle { name: game.title().to_string(), code: game.code.clone(), source: game.source.clone() };
                 if let Err(e) = library::save_last(&self.data_dir(), &last) {
                     self.message = Some(e);
@@ -538,6 +598,8 @@ impl App {
         game.restart();
         let saved = game.save(&data_dir);
         self.overlays.clear();
+        self.summary = None;
+        self.summary_waiting = false;
         self.message = Some(match (saved, kept) {
             (Err(e), _) => e,
             (Ok(()), Some(n)) => format!("Restarted; your position is kept as checkpoint {n}"),
@@ -562,6 +624,8 @@ impl App {
             Ok(()) if improvement.shown => format!("{} · new best!", solved_message(&score)),
             Ok(()) => solved_message(&score),
         });
+        self.summary = Some(Summary { score, new_best: improvement.shown });
+        self.summary_waiting = true;
     }
 
     /// Saves progress if a game is open. The screen stays as it is.
@@ -882,5 +946,64 @@ mod tests {
         assert_eq!((saved.theme.as_str(), saved.show_goal), ("escape-light", true));
         press(&mut app, &[Key::Char(',')]);
         assert_eq!(app.context(), Context::Game);
+    }
+
+    /// Ticks the app forward through simulated time until `done` holds.
+    fn run_until(app: &mut App, done: impl Fn(&App) -> bool) {
+        let mut now = Instant::now();
+        for _ in 0..2000 {
+            app.tick(now);
+            if done(app) {
+                return;
+            }
+            now += std::time::Duration::from_millis(50);
+        }
+        panic!("never got there");
+    }
+
+    #[test]
+    fn the_summary_follows_the_fade_and_replay_returns_to_it() {
+        let (_tmp, mut app) = app();
+        tiny(&mut app);
+        press(&mut app, &[Key::Char('s'), Key::ShiftArrow(Dir::Right), Key::ShiftArrow(Dir::Down)]);
+        assert!(app.overlays.is_empty(), "the summary waits for the fade");
+        run_until(&mut app, |a| a.context() == Context::Summary);
+        let Some(Overlay::Summary(summary)) = app.overlays.last() else { panic!() };
+        assert_eq!(summary.score.moves, 1);
+        assert!(summary.new_best);
+
+        // v looks at the board.
+        press(&mut app, &[Key::Char('v')]);
+        assert_eq!(app.context(), Context::Game);
+
+        // Undo and solve again, then replay: the replay plays the moves and
+        // brings the summary back.
+        press(&mut app, &[Key::Char('u'), Key::Char('s'), Key::ShiftArrow(Dir::Right), Key::ShiftArrow(Dir::Down)]);
+        run_until(&mut app, |a| a.context() == Context::Summary);
+        press(&mut app, &[Key::Char('p')]);
+        assert_eq!(app.context(), Context::Replay);
+        assert_eq!(game(&app).shown().move_count(), 0, "the replay starts from the beginning");
+        run_until(&mut app, |a| a.context() == Context::Summary);
+        assert!(game(&app).replay.is_none());
+
+        // Stopping a replay early also brings it back.
+        press(&mut app, &[Key::Char('p'), Key::Esc]);
+        run_until(&mut app, |a| a.context() == Context::Summary);
+
+        // o leaves for the Open screen.
+        press(&mut app, &[Key::Char('o')]);
+        assert!(matches!(app.screen, Screen::Open(..)));
+    }
+
+    #[test]
+    fn restarting_after_a_solve_drops_the_summary() {
+        let (_tmp, mut app) = app();
+        tiny(&mut app);
+        press(&mut app, &[Key::Char('s'), Key::ShiftArrow(Dir::Right), Key::ShiftArrow(Dir::Down)]);
+        press(&mut app, &[Key::Char('.'), Key::Char('r'), Key::Char('y'), Key::Char('n')]);
+        settle(&mut app);
+        run_until(&mut app, |a| !a.animating());
+        assert_eq!(app.context(), Context::Game);
+        assert!(app.summary.is_none());
     }
 }

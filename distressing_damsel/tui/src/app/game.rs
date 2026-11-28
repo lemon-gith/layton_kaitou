@@ -14,6 +14,7 @@ use ratatui::Frame;
 use super::draw::Chrome;
 use super::hints::{HintSearch, ShownHint, SolverState};
 use super::play::{Animation, Mode};
+use super::replay::Replay;
 use crate::data::library::Source;
 use crate::data::progress::{self, puzzle_id, Progress};
 use crate::data::records::Records;
@@ -50,6 +51,8 @@ pub struct GameScreen {
     pub hint: Option<ShownHint>,
     /// A search for a hint, still running.
     pub hint_search: Option<HintSearch>,
+    /// The player's solution being played back.
+    pub replay: Option<Replay>,
     /// The last painted board, reused until something it shows changes.
     cache: RefCell<Option<(CacheKey, Canvas)>>,
 }
@@ -109,6 +112,7 @@ impl GameScreen {
             solver,
             hint: None,
             hint_search: None,
+            replay: None,
             cache: RefCell::new(None),
         };
         Ok((screen, warning))
@@ -116,6 +120,17 @@ impl GameScreen {
 
     pub fn game(&self) -> &Game {
         &self.progress.game
+    }
+
+    /// The board to draw: the replay's while one is playing.
+    pub fn shown(&self) -> &Game {
+        self.replay.as_ref().map_or(&self.progress.game, |r| &r.game)
+    }
+
+    /// Plays the player's moves back from the start.
+    pub fn start_replay(&mut self, now: Instant, animate: bool) {
+        let game = self.game();
+        self.replay = Some(Replay::new(game.puzzle().clone(), game.history().to_vec(), now, animate));
     }
 
     pub fn title(&self) -> &str {
@@ -185,6 +200,10 @@ impl GameScreen {
         } else {
             HashMap::new()
         };
+        if self.replay.is_some() {
+            // Only the moves themselves: no cursor, hint or reach.
+            return PaintOptions { scale, labels, ..settings.paint_options() };
+        }
         PaintOptions {
             scale,
             labels,
@@ -200,7 +219,11 @@ impl GameScreen {
     /// The motion to draw now, if a block is moving, fading or gone.
     fn motion(&self, scale: usize, now: Instant) -> Option<Motion> {
         let elapsed = |started: &Instant| now.saturating_duration_since(*started).as_millis() as f32;
-        match &self.animation {
+        let (animation, exited, game) = match &self.replay {
+            Some(r) => (&r.animation, r.exited, &r.game),
+            None => (&self.animation, self.exited, self.game()),
+        };
+        match animation {
             Some(Animation::Slide { block, path, started, millis }) => {
                 let t = elapsed(started) / *millis as f32;
                 Some(Motion { block: *block, offset: slide_offset(path, scale, t), opacity: 1.0 })
@@ -209,13 +232,13 @@ impl GameScreen {
                 let t = elapsed(started) / EXIT_MILLIS as f32;
                 Some(Motion { block: *block, offset: (0, 0), opacity: exit_opacity(t) })
             }
-            None if self.exited => exiting_block(self.game()).map(|block| Motion { block, offset: (0, 0), opacity: 0.0 }),
+            None if exited => exiting_block(game).map(|block| Motion { block, offset: (0, 0), opacity: 0.0 }),
             None => None,
         }
     }
 
     fn canvas(&self, settings: &Settings, scale: usize, now: Instant) -> Canvas {
-        let game = self.game();
+        let game = self.shown();
         let options = self.paint_options(settings, scale, now);
         if let Some(motion) = self.motion(scale, now) {
             return paint_moving(game, settings.theme(), &options, motion);
@@ -247,6 +270,10 @@ impl GameScreen {
     /// A line for the side panel saying what the keys do now.
     fn mode_line(&self) -> Option<String> {
         let label = |b: usize| self.game().puzzle().blocks[b].label;
+        if let Some(replay) = &self.replay {
+            let (shown, total) = replay.position();
+            return Some(format!("replaying {shown} of {total}"));
+        }
         match self.mode {
             Mode::Base if self.game().is_solved() => Some("solved".into()),
             Mode::Base => None,

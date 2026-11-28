@@ -54,6 +54,10 @@ pub enum Action {
     Preferences,
     /// Change the chosen preference: forwards, or back.
     Adjust(bool),
+    /// Play the player's solution back.
+    Replay,
+    /// Leave this puzzle for the Open screen.
+    OpenAnother,
     // Dialogues.
     Yes,
     No,
@@ -101,6 +105,10 @@ pub enum Context {
     /// A yes-or-no dialogue.
     Confirm,
     Preferences,
+    /// The summary after solving.
+    Summary,
+    /// The player's solution playing back.
+    Replay,
 }
 
 pub fn table(context: Context) -> &'static [Binding] {
@@ -116,6 +124,8 @@ pub fn table(context: Context) -> &'static [Binding] {
         Context::Help => HELP,
         Context::Confirm => CONFIRM,
         Context::Preferences => PREFERENCES,
+        Context::Summary => SUMMARY,
+        Context::Replay => REPLAY,
     }
 }
 
@@ -200,6 +210,14 @@ const PREFERENCES: &[Binding] = &[
     bind(&[Key::Esc, Key::Char(',')], "esc", "close", Action::Back, true),
 ];
 
+const SUMMARY: &[Binding] = &[
+    bind(&[Key::Char('v'), Key::Esc], "v", "look at the board", Action::Back, true),
+    bind(&[Key::Char('p')], "p", "replay your solution", Action::Replay, true),
+    bind(&[Key::Char('o')], "o", "open another puzzle", Action::OpenAnother, true),
+];
+
+const REPLAY: &[Binding] = &[bind(&[Key::Esc, Key::Char('p'), Key::Char(' ')], "esc", "stop the replay", Action::Back, true)];
+
 const HELP: &[Binding] = &[bind(&[Key::Esc, Key::Char('?'), Key::Enter], "esc", "close", Action::Back, true)];
 
 /// The action `key` triggers in `context`, if any. Letters not bound
@@ -241,6 +259,8 @@ mod tests {
             Context::Help,
             Context::Confirm,
             Context::Preferences,
+            Context::Summary,
+            Context::Replay,
         ] {
             let keys: Vec<Key> = table(context).iter().flat_map(|b| b.keys.iter().copied()).collect();
             for (i, k) in keys.iter().enumerate() {
