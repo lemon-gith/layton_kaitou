@@ -134,6 +134,8 @@ impl GameScreen {
     pub fn act(&mut self, action: Action, now: Instant, animate: bool) -> Option<Event> {
         self.snap();
         let was_solved = self.game().is_solved();
+        let old_mode = self.mode;
+        let history_before = self.game().history().to_vec();
         match (self.mode, action) {
             (Mode::Grab { .. }, Action::Undo | Action::Redo) => {}
             (_, Action::Undo) => {
@@ -187,6 +189,8 @@ impl GameScreen {
             _ => {}
         }
 
+        self.update_hint(action, old_mode, &history_before);
+
         let solved = self.game().is_solved();
         if !solved {
             self.exited = false;
@@ -208,6 +212,28 @@ impl GameScreen {
             return Some(Event::Solved);
         }
         None
+    }
+
+    /// Clears the hint once a move is committed: the hinted block reaches
+    /// the ghost, a grab is dropped, another block moves, the history is
+    /// undone or redone, or selection ends after the hinted block moved.
+    fn update_hint(&mut self, action: Action, old_mode: Mode, before: &[dd_engine::Drag]) {
+        let Some(hint) = &mut self.hint else { return };
+        let history = self.progress.game.history();
+        let changed = history != before;
+        let other_moved = changed && history.last().map(|d| d.block) != Some(hint.block);
+        let arrived = self.progress.game.anchor(hint.block) == Some(hint.to);
+        let committed = match action {
+            Action::Undo | Action::Redo => changed,
+            Action::Drop => true,
+            Action::Back => matches!(old_mode, Mode::Select { .. }) && hint.moved,
+            _ => false,
+        };
+        if other_moved || arrived || committed {
+            self.hint = None;
+        } else if changed {
+            hint.moved = true;
+        }
     }
 
     /// Moves on from a finished slide to a waiting exit animation.

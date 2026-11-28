@@ -12,6 +12,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use super::draw::Chrome;
+use super::hints::{HintSearch, ShownHint, SolverState};
 use super::play::{Animation, Mode};
 use crate::data::library::Source;
 use crate::data::progress::{self, puzzle_id, Progress};
@@ -40,8 +41,15 @@ pub struct GameScreen {
     pub animation: Option<Animation>,
     /// The exit, waiting for the last slide to finish.
     pub pending_exit: Option<Animation>,
+    /// When the screen opened, for the spinner.
+    pub opened: Instant,
     /// The solved puzzle's key block has faded out.
     pub exited: bool,
+    pub solver: SolverState,
+    /// The hint on the board, if any.
+    pub hint: Option<ShownHint>,
+    /// A search for a hint, still running.
+    pub hint_search: Option<HintSearch>,
     /// The last painted board, reused until something it shows changes.
     cache: RefCell<Option<(CacheKey, Canvas)>>,
 }
@@ -58,6 +66,8 @@ struct CacheKey {
     grabbed: bool,
     labels: bool,
     reach: u64,
+    ghost: Option<(usize, u8)>,
+    pulse: Option<(usize, u32)>,
 }
 
 /// Where the board and panel go.
@@ -83,6 +93,7 @@ impl GameScreen {
         };
         let warning = not_saving.as_ref().map(|e| format!("{e}; starting afresh and not saving over it"));
         let exited = progress.game.is_solved();
+        let solver = SolverState::start(&progress.game);
         let screen = GameScreen {
             spec,
             code,
@@ -93,7 +104,11 @@ impl GameScreen {
             last_cursor: None,
             animation: None,
             pending_exit: None,
+            opened: Instant::now(),
             exited,
+            solver,
+            hint: None,
+            hint_search: None,
             cache: RefCell::new(None),
         };
         Ok((screen, warning))
@@ -164,7 +179,7 @@ impl GameScreen {
         }
     }
 
-    fn paint_options(&self, settings: &Settings, scale: usize) -> PaintOptions {
+    fn paint_options(&self, settings: &Settings, scale: usize, now: Instant) -> PaintOptions {
         let labels = if self.labels_shown(settings) {
             self.game().puzzle().blocks.iter().enumerate().map(|(i, b)| (i, b.label.to_string())).collect()
         } else {
@@ -176,6 +191,8 @@ impl GameScreen {
             selected: self.cursor(),
             grabbed: matches!(self.mode, Mode::Grab { .. }),
             reach: if settings.mark_reachable { self.reach() } else { 0 },
+            ghost: self.hint.map(|h| (h.block, h.to)),
+            pulse: self.hint_pulse(now),
             ..settings.paint_options()
         }
     }
@@ -199,7 +216,7 @@ impl GameScreen {
 
     fn canvas(&self, settings: &Settings, scale: usize, now: Instant) -> Canvas {
         let game = self.game();
-        let options = self.paint_options(settings, scale);
+        let options = self.paint_options(settings, scale, now);
         if let Some(motion) = self.motion(scale, now) {
             return paint_moving(game, settings.theme(), &options, motion);
         }
@@ -214,6 +231,8 @@ impl GameScreen {
             grabbed: options.grabbed,
             labels: !options.labels.is_empty(),
             reach: options.reach,
+            ghost: options.ghost,
+            pulse: options.pulse.map(|(b, a)| (b, (a * 1000.0) as u32)),
         };
         if let Some((cached, canvas)) = &*self.cache.borrow() {
             if *cached == key {
@@ -237,6 +256,21 @@ impl GameScreen {
         }
     }
 
+    /// The solver row of the side panel.
+    fn solver_text(&self, settings: &Settings, now: Instant) -> String {
+        const SPIN: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+        let spin = SPIN[(now.duration_since(self.opened).as_millis() / 80) as usize % SPIN.len()];
+        match &self.solver {
+            SolverState::Running(job) => format!("{spin} {} positions", job.progress().states),
+            SolverState::Solved { .. } => match (settings.show_solver_length, self.solver.shortest()) {
+                (true, Some(n)) => format!("✓ {n} moves"),
+                _ => "✓".into(),
+            },
+            SolverState::NoSolution => "✗ no solution".into(),
+            SolverState::GaveUp => "✗ gave up".into(),
+        }
+    }
+
     pub fn draw(&self, frame: &mut Frame, area: Rect, settings: &Settings, records: &Records, chrome: &Chrome) {
         let arrangement = self.arrange(settings, area);
         let canvas = self.canvas(settings, arrangement.scale, Instant::now());
@@ -256,8 +290,11 @@ impl GameScreen {
             row("moves", game.move_count().to_string()),
             row("best", best),
             row("hints", self.progress.counters.hints.to_string()),
-            row("solver", "—".into()),
+            row("solver", self.solver_text(settings, Instant::now())),
         ];
+        if self.hint_search.is_some() {
+            lines.push(Line::from(Span::styled("finding a hint…", chrome.dim())));
+        }
         if let Some(mode) = self.mode_line() {
             lines.push(Line::default());
             lines.push(Line::from(Span::styled(mode, chrome.selected())));

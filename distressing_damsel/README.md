@@ -45,6 +45,10 @@ cargo run --release -- solve path/to/puzzle.toml --boards
   it back where the grab began.
 - `j` shows every block's label; type one to jump the cursor there.
 - `u` and `r` undo and redo whole moves; `g` shows or hides the goal.
+- `h` gives a hint once the solver has finished (the side panel shows ✓):
+  the block to move pulses and a faint copy shows where it should go. Hints
+  count towards your attempt, so you are asked first unless you tick
+  "don't ask again".
 - Esc steps back a mode, `?` lists the keys for the mode you are in, and
   `.` opens the pause menu.
 
